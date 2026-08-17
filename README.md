@@ -1,4 +1,4 @@
-# Pebble Authenticator - TOTP Authenticator for Pebble
+# 2FActor - TOTP Authenticator for Pebble
 
 A lightweight, secure, and fully offline Two-Factor Authentication (2FA / TOTP) application for Pebble smartwatches. Bring your login codes right to your wrist!
 
@@ -28,6 +28,7 @@ A lightweight, secure, and fully offline Two-Factor Authentication (2FA / TOTP) 
 ## Acknowledgments & Credits
 
 * **SHA1 Implementation:** The core cryptographic logic (SHA1/HMAC) used to generate the TOTP codes is adapted from the excellent [neal/pebble-authenticator](https://github.com/neal/pebble-authenticator) repository.
+* The source fork of this app is from [michi1996](https://github.com/michi1996/pebble-authenticator).
 
 ## Disclaimers
 
