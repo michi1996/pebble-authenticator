@@ -2,6 +2,8 @@
 
 A lightweight, secure, and fully offline Two-Factor Authentication (2FA / TOTP) application for Pebble smartwatches. Bring your login codes right to your wrist!
 
+Find it on the [Pebble App Store](https://apps.repebble.com/2factor_6280cfd5b8a34761ae33bb4c)
+
 ## Features
 
 * **Fully Offline & Secure:** Your secret keys are stored strictly locally on your smartphone (using `localStorage`) and on the Pebble watch itself (using `persist_write_data`). No cloud sync, no tracking, and no external servers.
@@ -12,12 +14,12 @@ A lightweight, secure, and fully offline Two-Factor Authentication (2FA / TOTP) 
 * **Clean Interface:** Optimized for readability on Pebble displays (especially Pebble Time 2), featuring large, bold fonts and an animated progress bar to show when the next code will arrive. Now with touch support!
 * **Easy Management:** View, reorder, and delete individual accounts directly from the Pebble app configuration screen.
 
-##  Built With
+## Built With
 
 * **Pebble C SDK:** Core application and UI rendering on the smartwatch.
 * **PebbleKit JS & Clay:** Configuration page for managing accounts via the official Pebble mobile app.
 
-##  How to Use
+## How to Use
 
 1. Open the **Pebble App** on your smartphone and navigate to the settings of this app.
 2. Under **Import**, paste your exported `otpauth://totp/...` URIs to load multiple accounts.
@@ -39,7 +41,7 @@ A lightweight, secure, and fully offline Two-Factor Authentication (2FA / TOTP) 
 
 ### 🤖 AI Assisted
 
-This application was developed with the assistance of Google's **Gemini AI** and Anthropic's **Claude**. It helped in bridging the gap between modern JavaScript configuration tools (Clay) and the Pebble C SDK. 
+This application was developed with the assistance of Google's **Gemini AI** and Anthropic's **Claude**. It helped in bridging the gap between modern JavaScript configuration tools (Clay) and the Pebble C SDK.
 
 If you encounter any bugs, have ideas for new features, or want to suggest improvements, please feel free to open an issue or send me a message! I am always happy to receive feedback and make the app even better.
 
