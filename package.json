@@ -1,15 +1,15 @@
 {
-    "author": "Achi",
+    "author": "ch604",
     "dependencies": {
         "@rebble/clay": "^1.0.8"
     },
     "keywords": [],
-    "name": "authenticator",
+    "name": "2factor",
     "pebble": {
         "capabilities": [
             "configurable"
         ],
-        "displayName": "Authenticator",
+        "displayName": "2factor",
         "enableMultiJS": true,
         "messageKeys": [
             "CLEAR_ACCOUNTS",
@@ -40,7 +40,7 @@
             "flint",
             "gabbro"
         ],
-        "uuid": "0a8a3e0d-428f-4708-93e7-0c55448d5ab0",
+        "uuid": "d28181d4-cd71-4a2b-99dc-8c87fb7dc471",
         "watchapp": {
             "watchface": false
         }
