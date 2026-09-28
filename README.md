@@ -1,4 +1,4 @@
-# 2FActor - TOTP Authenticator for Pebble
+# Pebble Authenticator - TOTP Authenticator for Pebble
 
 A lightweight, secure, and fully offline Two-Factor Authentication (2FA / TOTP) application for Pebble smartwatches. Bring your login codes right to your wrist!
 
