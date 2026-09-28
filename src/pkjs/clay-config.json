@@ -77,6 +77,16 @@
   },
   {
     "type": "heading",
+    "defaultValue": "More Settings"
+  },
+  {
+  "type": "toggle",
+  "messageKey": "SETTING_LOOP_LIST",
+  "label": "Enabe Loop",
+  "defaultValue": true
+  },
+  {
+    "type": "heading",
     "defaultValue": "System"
   },
   {

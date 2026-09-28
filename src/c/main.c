@@ -8,6 +8,7 @@
 
 #define PERSIST_KEY_NUM_ACCOUNTS 100
 #define PERSIST_KEY_ACCOUNT_BASE 200
+#define PERSIST_KEY_LOOP_LIST 300 // Dedicated persist key for the loop setting
 
 // Row height and name-label size scale with the actual display height.
 // This means new/round platforms (Chalk, Gabbro) get a sensible size.
@@ -41,6 +42,9 @@ static Window *s_main_window;
 static MenuLayer *s_menu_layer;
 static bool s_touch_subscribed = false;
 
+// Global variable for the loop status (default: on)
+static bool s_loop_list = true;
+
 // Drag-scroll state, used only on platforms where touch is present and enabled.
 static bool s_touch_dragging = false;
 static int16_t s_touch_start_y = 0;
@@ -54,7 +58,7 @@ static void generate_totp_string(const char *secret, uint8_t period, uint8_t dig
   int key_len = base32_decode((const uint8_t *)secret, key, sizeof(key));
 
   if (key_len <= 0) {
-    // Falls das Secret ungültig ist, zeigen wir einen Fehler an
+    // If the secret is invalid, display an error
     snprintf(out_buffer, out_len, "ERR 001");
     return;
   }
@@ -131,7 +135,7 @@ static void menu_draw_row_callback(GContext* ctx, const Layer *cell_layer, MenuI
     graphics_context_set_fill_color(ctx, GColorWhite); 
     graphics_fill_rect(ctx, bounds, 0, GCornerNone);
 
-    // 2. Text gut sichtbar in Schwarz zeichnen
+    // Draw text clearly visible in black
     graphics_context_set_text_color(ctx, GColorBlack);
     graphics_draw_text(ctx, "No Accounts!\nPlease add Accounts in the App-Settings.", 
                        fonts_get_system_font(FONT_NAME), 
@@ -200,6 +204,13 @@ static void inbox_received_callback(DictionaryIterator *iterator, void *context)
     
     menu_layer_reload_data(s_menu_layer);
   }
+  
+  // Handle the loop list setting toggle from the phone
+  Tuple *loop_tuple = dict_find(iterator, MESSAGE_KEY_SETTING_LOOP_LIST);
+  if (loop_tuple) {
+    s_loop_list = loop_tuple->value->int32 == 1;
+    persist_write_bool(PERSIST_KEY_LOOP_LIST, s_loop_list);
+  }
 }
 
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
@@ -250,6 +261,50 @@ static void touch_handler(const TouchEvent *event, void *context) {
   }
 }
 
+// --- Custom Click Handlers for Menu Looping ---
+
+// Handler for the "Down" button
+static void down_single_click_handler(ClickRecognizerRef recognizer, void *context) {
+  if (s_num_accounts <= 0) return;
+
+  MenuIndex current_index = menu_layer_get_selected_index(s_menu_layer);
+  
+  if (current_index.row < (s_num_accounts - 1)) {
+    current_index.row++; // Normal scrolling downwards
+  } else if (s_loop_list) {
+    current_index.row = 0; // Loop: jump back to the beginning
+  }
+  
+  menu_layer_set_selected_index(s_menu_layer, current_index, MenuRowAlignCenter, true);
+}
+
+// Handler for the "Up" button
+static void up_single_click_handler(ClickRecognizerRef recognizer, void *context) {
+  if (s_num_accounts <= 0) return;
+
+  MenuIndex current_index = menu_layer_get_selected_index(s_menu_layer);
+  
+  if (current_index.row > 0) {
+    current_index.row--; // Normal scrolling upwards
+  } else if (s_loop_list) {
+    current_index.row = s_num_accounts - 1; // Loop: jump to the end of the list
+  }
+  
+  menu_layer_set_selected_index(s_menu_layer, current_index, MenuRowAlignCenter, true);
+}
+
+// Empty handler to prevent crashes when the middle select button is pressed
+static void select_single_click_handler(ClickRecognizerRef recognizer, void *context) {
+  // Can be used later if an action menu is required
+}
+
+// Registers our custom button handlers instead of the default MenuLayer ones
+static void custom_click_config_provider(void *context) {
+  window_single_repeating_click_subscribe(BUTTON_ID_DOWN, 100, down_single_click_handler);
+  window_single_repeating_click_subscribe(BUTTON_ID_UP, 100, up_single_click_handler);
+  window_single_click_subscribe(BUTTON_ID_SELECT, select_single_click_handler);
+}
+
 static void main_window_appear(Window *window) {
   if (touch_service_is_enabled()) {
     touch_service_subscribe(touch_handler, NULL);
@@ -278,7 +333,9 @@ static void main_window_load(Window *window) {
     .draw_row = menu_draw_row_callback,
   });
   
-  menu_layer_set_click_config_onto_window(s_menu_layer, window);
+  // Use our custom click configuration instead of the default MenuLayer provider
+  // This enables the looping logic
+  window_set_click_config_provider(window, custom_click_config_provider);
   layer_add_child(window_layer, menu_layer_get_layer(s_menu_layer));
 }
 
@@ -299,6 +356,11 @@ static void init() {
         persist_read_data(PERSIST_KEY_ACCOUNT_BASE + i, &s_accounts[i], sizeof(Account));
       }
     }
+  }
+
+  // Load the loop list preference from persistent storage
+  if (persist_exists(PERSIST_KEY_LOOP_LIST)) {
+    s_loop_list = persist_read_bool(PERSIST_KEY_LOOP_LIST);
   }
 
   s_main_window = window_create();
