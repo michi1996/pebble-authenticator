@@ -29,6 +29,26 @@
     "label": "Secret Key"
   },
   {
+    "type": "select",
+    "id": "manual_period",
+    "label": "Code Validity",
+    "defaultValue": "30",
+    "options": [
+      { "label": "30 seconds (standard)", "value": "30" },
+      { "label": "60 seconds", "value": "60" }
+    ]
+  },
+  {
+    "type": "select",
+    "id": "manual_digits",
+    "label": "Code Length",
+    "defaultValue": "6",
+    "options": [
+      { "label": "6 digits (standard)", "value": "6" },
+      { "label": "8 digits", "value": "8" }
+    ]
+  },
+  {
     "type": "button",
     "id": "btn_add",
     "defaultValue": "Add"
