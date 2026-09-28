@@ -2,7 +2,7 @@
 
 A lightweight, secure, and fully offline Two-Factor Authentication (2FA / TOTP) application for Pebble smartwatches. Bring your login codes right to your wrist!
 
-Find it on the [Pebble App Store](https://apps.repebble.com/2factor_6280cfd5b8a34761ae33bb4c)
+Find it on the [Pebble App Store](https://apps.repebble.com/864fb2cb5c0444b088dbbaa0)
 
 ## Features
 
@@ -30,7 +30,6 @@ Find it on the [Pebble App Store](https://apps.repebble.com/2factor_6280cfd5b8a3
 ## Acknowledgments & Credits
 
 * **SHA1 Implementation:** The core cryptographic logic (SHA1/HMAC) used to generate the TOTP codes is adapted from the excellent [neal/pebble-authenticator](https://github.com/neal/pebble-authenticator) repository.
-* The source fork of this app is from [michi1996](https://github.com/michi1996/pebble-authenticator).
 
 ## Disclaimers
 
