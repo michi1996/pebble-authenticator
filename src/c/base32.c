@@ -1,7 +1,7 @@
 #include "base32.h"
 
 int base32_decode(const uint8_t *encoded, uint8_t *result, int bufSize) {
-    int buffer = 0;
+    uint32_t buffer = 0; // unsigned: shifting old bits out must not overflow
     int bitsLeft = 0;
     int count = 0;
     
@@ -14,7 +14,7 @@ int base32_decode(const uint8_t *encoded, uint8_t *result, int bufSize) {
         
         buffer <<= 5;
 
-        // Base32 Alphabet: A-Z (0-25) und 2-7 (26-31)
+        // Base32 Alphabet: A-Z (0-25) and 2-7 (26-31)
         if (ch >= 'A' && ch <= 'Z') {
             buffer |= (ch - 'A');
         } else if (ch >= 'a' && ch <= 'z') {
@@ -29,7 +29,7 @@ int base32_decode(const uint8_t *encoded, uint8_t *result, int bufSize) {
 
         bitsLeft += 5;
         if (bitsLeft >= 8) {
-            result[count++] = buffer >> (bitsLeft - 8);
+            result[count++] = (uint8_t)(buffer >> (bitsLeft - 8));
             bitsLeft -= 8;
         }
     }
