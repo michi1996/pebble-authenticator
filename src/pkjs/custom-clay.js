@@ -22,13 +22,29 @@ module.exports = function() {
   var AVATAR_COLORS = ['#e5484d', '#d6409f', '#8e4ec6', '#6e56cf', '#3e63dd',
                        '#0b7fd4', '#0f9488', '#2f9e5c', '#d9600b', '#a07450'];
 
+  // resources/images/menu_icon.png, the app icon shown in the launcher.
+  var APP_ICON = 'data:image/png;base64,' +
+    'iVBORw0KGgoAAAANSUhEUgAAABkAAAAZCAYAAADE6YVjAAADuUlEQVR4AWyVy6tWZRTGn7ULRA8hSUYQBdFA6EIkhh' +
+    'GUnW7QwEGDBg36Axo0aVJEBl1sFDQJbNKwhgXRXTyKCIKgqIiCKDoQFMSZF0R0+XvWu9/v25/Hl7XW86xnrfey373P' +
+    'dwZNRsz4nM2kIl3vWGKF1UrJsj7ZJJRNJ8JcjQqicwnfKeVVETDjV/B1eBkzaDGNEVVofbKJU6kqYjjNCluVcQblc3' +
+    'wJty3R9yXkNP4CXpZRQDs4cpgGmo1z97o9C62F/sHJH1PqGvwLfDu+g/w6+Dj+O/4gTpsjC2DUbRbYxAK7YrrPhh9K' +
+    'ehS/ib9EfSf4J/4t/gpzboNPgdvrZmkgX2WDlfBGJh3Nm7/eQLvAU+r3QYIdo/3ncd0362YR2ZCITcggjkCz7OaUp7' +
+    'a+JXG8YXU1SmSdQ8HGqE+SSgGTBxUokSR9XWTQsn6cSiq0Pt1baDIz72Rb+IHqRki5lj0FQ4MlLY6NaN9IsQJuVRuf' +
+    'Afvmnp1/iobFy4QV/Gve/iO1D0kZhxiKOLCiAf8+Jb6iXAY3jBM2oW+zc7vbaMXD+SZxXegb0JbBHfh3eBkae0oDC5' +
+    'WgkYT0YhPGOOpjVhdnKfuEwnlG35aSIO7jUJo/iVi+CtG+eXhZk+WyJ2g2emEmFEFdU2QMyZNONvG+roB0elE5kBrq' +
+    'dObqYyHponLxJOj+uoAyL1yrqT17rVGh7tU9ZCfAH2k9CU7tBsl+/Afu8xewjL7CyZM4ZxnDfT12Iz+Pf0zXs+BB3D' +
+    '+UH4HrQ/UhfALnxQfQzxbTd6LVw732quT/BT2EfoO+KsVPkm61x4dVP8eAqq5uel2j7lrzaH/A1mkO6R2JCJdHyk92' +
+    '1OdFtVIe1S+//M1cfGlc17SltPRa3qERtKxzvs2Cv3Ln76HsosfvB4pKbKtUXMvifyP9R+UJUPzFp3HqA03ULblWE5' +
+    '3YPyDzNT1Ez2242GwzuC4hTFoD/iXpDfwKfova+MdohlJ9dJqOHJo4Nva0TzQuobCPniaspOJfpj2M9g+4rKh/cv4F' +
+    'v5TM47ooJW5reMeUyQWz0GqsYZIbxWRq5/EDUD4AnYMv42e40tfAOggorktjv/o40skc496eZ+S9JP/Tep83dlgK/1' +
+    's4K8kbXgSb0cdvV8iP1JSK/mXds7gqnYvCFjqfw63eILzLI+4l54pi9gTklMSTBAtgqlSManpLaaG+17DIaQulmVZf' +
+    'V6rGZaJf9gU2k9ypNpL2IbMrYzurtzLRBwCmk5za26wWa4opzpq1j3vKM3UXAAD//5/UNNEAAAAGSURBVAMAlR0BTE' +
+    '5zdiEAAAAASUVORK5CYII=';
+
   var SVG_OPEN = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" ';
   var STROKE = 'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
                'stroke-linejoin="round"';
   var ICONS = {
-    shield: SVG_OPEN + 'width="28" height="28" ' + STROKE + '>' +
-      '<path d="M12 2.5l7.5 3v5.7c0 4.6-3.2 8.6-7.5 10.3-4.3-1.7-7.5-5.7-7.5-10.3V5.5z"/>' +
-      '<rect x="9" y="10.5" width="6" height="5" rx="1.2"/><path d="M10.2 10.5V9a1.8 1.8 0 0 1 3.6 0v1.5"/></svg>',
     watch: SVG_OPEN + 'width="16" height="16" ' + STROKE + '>' +
       '<rect x="6.5" y="6" width="11" height="12" rx="3"/><path d="M9 6l.8-3h4.4L15 6M9 18l.8 3h4.4l.8-3"/></svg>',
     grip: SVG_OPEN + 'width="20" height="20" fill="currentColor">' +
@@ -784,7 +800,7 @@ module.exports = function() {
     initialize: function() {
       var root = this.$element[0];
       root.appendChild(el('div', { className: 'hero' }, [
-        el('div', { className: 'hero-icon', html: ICONS.shield }),
+        el('div', { className: 'hero-icon' }, [el('img', { src: APP_ICON, alt: '' })]),
         el('div', {}, [
           el('h1', { text: 'Authenticator' }),
           el('p', { text: 'Two-factor codes on your Pebble' })
@@ -966,9 +982,11 @@ module.exports = function() {
     'html,body{background:var(--bg)!important;color:var(--text);',
     'font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;',
     'font-size:16px;line-height:1.45;-webkit-text-size-adjust:100%}',
-    'body{padding:calc(16px + env(safe-area-inset-top)) 16px calc(var(--savebar-h) + 20px + env(safe-area-inset-bottom))!important;',
+    'html,body{height:auto!important;min-height:100%}',
+    'body{padding:calc(16px + env(safe-area-inset-top)) 16px 0!important;',
     '-webkit-tap-highlight-color:transparent}',
-    '#main-form{max-width:640px;margin:0 auto}',
+    '#main-form{max-width:640px;margin:0 auto;',
+    'padding-bottom:calc(var(--savebar-h) + 24px + env(safe-area-inset-bottom))}',
     '#main-form .component{padding:0}',
     '#main-form h1,#main-form h2,#main-form h4,#main-form strong{font-family:inherit;text-transform:none;',
     'letter-spacing:-.01em;top:0;color:var(--text)}',
@@ -985,8 +1003,9 @@ module.exports = function() {
     '.auth-header{padding:4px 2px 20px!important}',
     '.hero{display:flex;align-items:center;gap:14px}',
     '.hero-icon{flex:0 0 52px;height:52px;border-radius:15px;display:flex;align-items:center;',
-    'justify-content:center;color:#fff;background:linear-gradient(145deg,#ff8040,#cf3a0b);',
+    'justify-content:center;background:linear-gradient(145deg,#ff8040,#cf3a0b);',
     'box-shadow:0 8px 20px rgba(207,58,11,.28)}',
+    '.hero-icon img{display:block;width:32px;height:32px}',
     '#main-form .hero h1{font-size:26px;line-height:1.15;font-weight:700;letter-spacing:-.02em}',
     '.hero p{color:var(--text-2);font-size:15px;margin-top:2px!important}',
     '.watch-chip{display:inline-flex;align-items:center;gap:6px;margin-top:14px;padding:6px 12px 6px 9px;',
