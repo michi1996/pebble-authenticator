@@ -7,7 +7,6 @@
         "pebble-app"
     ],
     "name": "authenticator",
-    "private": true,
     "pebble": {
         "capabilities": [
             "configurable"
@@ -52,5 +51,5 @@
             "watchface": false
         }
     },
-    "version": "1.6.1"
+    "version": "2.0.1"
 }
