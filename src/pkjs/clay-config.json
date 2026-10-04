@@ -11,6 +11,9 @@
     "type": "auth-add"
   },
   {
+    "type": "auth-backup"
+  },
+  {
     "type": "section",
     "items": [
       {

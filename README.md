@@ -13,6 +13,7 @@ Find it on the [Pebble App Store](https://apps.repebble.com/864fb2cb5c0444b088db
 * **High Capacity:** Stores and manages up to 100 different 2FA accounts natively on your watch (see [Storage](#storage)).
 * **Clean Interface:** Optimized for readability on Pebble displays (especially Pebble Time 2), featuring large, bold fonts and an animated progress bar to show when the next code will arrive. Swipe to scroll on touch watches.
 * **Modern Settings Page:** Light and dark mode, reorder accounts by dragging or with the arrow buttons, rename and delete them (with undo).
+* **Backup & Restore:** Save all accounts as text, optionally encrypted with a password, and restore them later – either adding to your list or replacing it (see [Backup](#backup)).
 
 ## Built With
 
@@ -39,6 +40,17 @@ The settings page works in the Pebble app by Core Devices on iOS and Android as 
 5. Hit **Save to watch** at the bottom. Your watch syncs the new list and confirms with a notification.
 
 If the watch is out of reach while saving, the transfer is finished automatically the next time you open the app on the watch.
+
+## Backup
+
+Under **Backup → Create backup** the settings page turns your account list into text that you can copy, for example into a password manager:
+
+* **Without password**, the backup is a list of standard `otpauth://` links, one per account. Other authenticator apps can import it too. Anyone who can read it can create your codes, so keep it safe.
+* **With password** (at least 8 characters), the backup is a single line starting with `pebble-auth-backup:1:`. The key is derived from the password with PBKDF2-HMAC-SHA256 (600,000 iterations, random salt) and the links are encrypted with AES-256-GCM. If you forget the password, the backup can't be opened.
+
+To restore, paste the backup (or open a text file) under **Backup → Restore**, enter the password if it is encrypted, and choose **Add to my list** (existing accounts are skipped) or **Replace my list**. Then tap **Save to watch**.
+
+Encrypted backup format, for decrypting it with other tools: `pebble-auth-backup:1:<iterations>:<salt>:<iv>:<ciphertext + 16-byte tag>`, all binary parts base64url without padding. The text before the last colon is used as additional authenticated data; the plaintext is the list of `otpauth://` links.
 
 ## Storage
 

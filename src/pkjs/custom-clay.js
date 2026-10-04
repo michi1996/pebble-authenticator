@@ -8,6 +8,8 @@ module.exports = function() {
   var MAX_NAME_BYTES = 31;     // the watch keeps 31 bytes of UTF-8 per name
   var MAX_SECRET_LENGTH = 79;  // and 79 Base32 characters per secret
   var MAX_LABEL_LENGTH = 64;
+  var BACKUP_ITERATIONS = 600000; // PBKDF2-SHA256, as recommended by OWASP
+  var MIN_PASSWORD_LENGTH = 8;
 
   var WATCH_NAMES = {
     aplite: 'Pebble Classic',
@@ -65,13 +67,18 @@ module.exports = function() {
     accounts: [],
     expanded: -1,  // index of the row showing its actions
     renaming: -1,  // index of the row being renamed
-    initial: null  // snapshot at page load, for the unsaved-changes hint
+    initial: null, // snapshot at page load, for the unsaved-changes hint
+    busy: false,   // a backup is being encrypted or decrypted
+    backupOf: null, // account list the shown backup was made from
+    restoreMode: 'add',
+    restoreArmed: false
   };
   var ui = {};
   var drag = null;
-  var reported = { importText: null, manual: null };
+  var reported = { importText: null, manual: null, restore: null };
   var toastTimer = null;
   var clearAllTimer = null;
+  var restoreTimer = null;
 
   // --- Text helpers ---
 
@@ -194,7 +201,8 @@ module.exports = function() {
     var type = (slash >= 0 ? body.slice(0, slash) : body).toLowerCase();
     var rest = slash >= 0 ? body.slice(slash + 1) : '';
     var query = rest.indexOf('?');
-    var label = cleanText(safeDecode(query >= 0 ? rest.slice(0, query) : rest));
+    var rawLabel = query >= 0 ? rest.slice(0, query) : rest;
+    var label = cleanText(safeDecode(rawLabel));
 
     var params = {};
     (query >= 0 ? rest.slice(query + 1) : '').split('&').forEach(function(pair) {
@@ -206,12 +214,25 @@ module.exports = function() {
       params[key] = cleanText(safeDecode(value.replace(/\+/g, ' ')));
     });
 
+    // The label is "Issuer:account" or just "account". Names may contain a
+    // colon themselves (encoded as %3A), so prefer the issuer parameter.
     var issuer = params.issuer || '';
     var user = label;
-    var colon = label.indexOf(':');
-    if (colon >= 0) {
-      if (!issuer) issuer = cleanText(label.slice(0, colon));
-      user = cleanText(label.slice(colon + 1));
+    if (issuer && label === issuer) {
+      user = '';
+    } else if (issuer && label.indexOf(issuer + ':') === 0) {
+      user = cleanText(label.slice(issuer.length + 1));
+    } else {
+      var colon = rawLabel.indexOf(':');
+      var colonLength = 1;
+      if (colon < 0) {
+        colon = rawLabel.search(/%3a/i);
+        colonLength = 3;
+      }
+      if (colon >= 0) {
+        if (!issuer) issuer = cleanText(safeDecode(rawLabel.slice(0, colon)));
+        user = cleanText(safeDecode(rawLabel.slice(colon + colonLength)));
+      }
     }
     var name = cleanName(issuer || user) || 'Account';
 
@@ -298,6 +319,370 @@ module.exports = function() {
     return parts.join(' \u00b7 ');
   }
 
+  // --- Backup encryption ---
+  // The page is a data: URL, which browsers don't treat as a secure context,
+  // so Web Crypto isn't available. These are compact implementations of the
+  // standard algorithms: PBKDF2-HMAC-SHA256 derives the key from the password
+  // and AES-256-GCM encrypts and authenticates the backup.
+
+  var SHA256_K = [
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+  ];
+  var SHA256_INIT = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                     0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+
+  // Runs the SHA-256 compression on state `v` (8 words) with the message
+  // block already in w[0..15] (w has room for 64 words).
+  function sha256Compress(v, w) {
+    var i, u, t1, t2;
+    for (i = 16; i < 64; i++) {
+      u = w[i - 2];
+      t1 = (u >>> 17 | u << 15) ^ (u >>> 19 | u << 13) ^ (u >>> 10);
+      u = w[i - 15];
+      t2 = (u >>> 7 | u << 25) ^ (u >>> 18 | u << 14) ^ (u >>> 3);
+      w[i] = (((t1 + w[i - 7]) | 0) + ((t2 + w[i - 16]) | 0)) | 0;
+    }
+    var a = v[0], b = v[1], c = v[2], d = v[3], e = v[4], f = v[5], g = v[6], h = v[7];
+    for (i = 0; i < 64; i++) {
+      t1 = (((((e >>> 6 | e << 26) ^ (e >>> 11 | e << 21) ^ (e >>> 25 | e << 7)) +
+        ((e & f) ^ (~e & g))) | 0) + ((h + ((SHA256_K[i] + w[i]) | 0)) | 0)) | 0;
+      t2 = (((a >>> 2 | a << 30) ^ (a >>> 13 | a << 19) ^ (a >>> 22 | a << 10)) +
+        ((a & b) ^ (a & c) ^ (b & c))) | 0;
+      h = g; g = f; f = e; e = (d + t1) | 0;
+      d = c; c = b; b = a; a = (t1 + t2) | 0;
+    }
+    v[0] = (v[0] + a) | 0; v[1] = (v[1] + b) | 0; v[2] = (v[2] + c) | 0; v[3] = (v[3] + d) | 0;
+    v[4] = (v[4] + e) | 0; v[5] = (v[5] + f) | 0; v[6] = (v[6] + g) | 0; v[7] = (v[7] + h) | 0;
+  }
+
+  function sha256Update(v, w, bytes, pos) {
+    for (var i = 0; i < 16; i++) {
+      var j = pos + i * 4;
+      w[i] = (bytes[j] << 24) | (bytes[j + 1] << 16) | (bytes[j + 2] << 8) | bytes[j + 3];
+    }
+    sha256Compress(v, w);
+  }
+
+  function wordsToBytes(words, count) {
+    var out = new Uint8Array(count * 4);
+    for (var i = 0; i < count; i++) {
+      out[i * 4] = words[i] >>> 24;
+      out[i * 4 + 1] = (words[i] >>> 16) & 255;
+      out[i * 4 + 2] = (words[i] >>> 8) & 255;
+      out[i * 4 + 3] = words[i] & 255;
+    }
+    return out;
+  }
+
+  // SHA-256 of `bytes`, continuing from `state` if given (used for HMAC).
+  function sha256(bytes, state, prefixLength) {
+    var v = new Int32Array(state || SHA256_INIT);
+    var w = new Int32Array(64);
+    var total = bytes.length + (prefixLength || 0);
+    var padded = new Uint8Array(((bytes.length + 9 + 63) >> 6) << 6);
+    padded.set(bytes);
+    padded[bytes.length] = 0x80;
+    var bits = total * 8;
+    padded[padded.length - 4] = bits >>> 24;
+    padded[padded.length - 3] = (bits >>> 16) & 255;
+    padded[padded.length - 2] = (bits >>> 8) & 255;
+    padded[padded.length - 1] = bits & 255;
+    padded[padded.length - 5] = Math.floor(total / 0x20000000) & 255;
+    for (var pos = 0; pos < padded.length; pos += 64) sha256Update(v, w, padded, pos);
+    return v;
+  }
+
+  // PBKDF2-HMAC-SHA256 (RFC 8018) for a 32-byte key. Keeps the HMAC inner
+  // and outer states and works on words in the hot loop. The work is done in
+  // slices so the page stays responsive: onProgress(fraction), onDone(key).
+  function pbkdf2Sha256(password, salt, iterations, onProgress, onDone) {
+    var key = password.length > 64 ? wordsToBytes(sha256(password), 8) : password;
+    var pad = new Uint8Array(64);
+    var w = new Int32Array(64);
+    var inner = new Int32Array(SHA256_INIT);
+    var outer = new Int32Array(SHA256_INIT);
+    var i;
+    for (i = 0; i < 64; i++) pad[i] = (key[i] || 0) ^ 0x36;
+    sha256Update(inner, w, pad, 0);
+    for (i = 0; i < 64; i++) pad[i] = (key[i] || 0) ^ 0x5c;
+    sha256Update(outer, w, pad, 0);
+
+    var msg = new Uint8Array(salt.length + 4);
+    msg.set(salt);
+    msg[salt.length + 3] = 1; // block index 1: one block gives 32 bytes
+    var first = sha256(wordsToBytes(sha256(msg, inner, 64), 8), outer, 64);
+    var u = new Int32Array(first);
+    var t = new Int32Array(first);
+    var s = new Int32Array(8);
+    var done = 1;
+
+    function slice() {
+      var stop = Math.min(iterations, done + 50000);
+      for (; done < stop; done++) {
+        // inner: H(ipad-state, U || padding), 96 bytes hashed in total
+        for (i = 0; i < 8; i++) { s[i] = inner[i]; w[i] = u[i]; }
+        w[8] = 0x80000000 | 0;
+        for (i = 9; i < 15; i++) w[i] = 0;
+        w[15] = 768;
+        sha256Compress(s, w);
+        // outer: H(opad-state, inner || padding)
+        for (i = 0; i < 8; i++) { w[i] = s[i]; u[i] = outer[i]; }
+        w[8] = 0x80000000 | 0;
+        for (i = 9; i < 15; i++) w[i] = 0;
+        w[15] = 768;
+        sha256Compress(u, w);
+        for (i = 0; i < 8; i++) t[i] ^= u[i];
+      }
+      if (done < iterations) {
+        if (onProgress) onProgress(done / iterations);
+        setTimeout(slice, 0);
+      } else {
+        onDone(wordsToBytes(t, 8));
+      }
+    }
+    setTimeout(slice, 0);
+  }
+
+  var aesTables = null;
+
+  // AES encryption tables, computed once (same construction as SJCL).
+  function getAesTables() {
+    if (aesTables) return aesTables;
+    var enc = [[], [], [], []];
+    var sbox = [];
+    var d = [];
+    var th = [];
+    var i, x, xInv, x2, s, tEnc;
+    for (i = 0; i < 256; i++) {
+      sbox[i] = 0;
+      th[(d[i] = i << 1 ^ (i >> 7) * 283) ^ i] = i;
+    }
+    for (x = xInv = 0; !sbox[x]; x ^= x2 || 1, xInv = th[xInv] || 1) {
+      s = xInv ^ xInv << 1 ^ xInv << 2 ^ xInv << 3 ^ xInv << 4;
+      s = s >> 8 ^ s & 255 ^ 99;
+      sbox[x] = s;
+      x2 = d[x];
+      tEnc = d[s] * 0x101 ^ s * 0x1010100;
+      for (i = 0; i < 4; i++) {
+        enc[i][x] = tEnc = tEnc << 24 ^ tEnc >>> 8;
+      }
+    }
+    aesTables = { t: enc, sbox: sbox };
+    return aesTables;
+  }
+
+  function bytesToWords(bytes) {
+    var words = [];
+    for (var i = 0; i < bytes.length; i += 4) {
+      words.push((bytes[i] << 24) | (bytes[i + 1] << 16) | (bytes[i + 2] << 8) | bytes[i + 3]);
+    }
+    return words;
+  }
+
+  function aesExpandKey(keyBytes) {
+    var sbox = getAesTables().sbox;
+    var key = bytesToWords(keyBytes);
+    var keyLen = key.length;
+    var rcon = 1;
+    for (var i = keyLen; i < 4 * keyLen + 28; i++) {
+      var tmp = key[i - 1];
+      if (i % keyLen === 0 || (keyLen === 8 && i % keyLen === 4)) {
+        tmp = sbox[tmp >>> 24] << 24 ^ sbox[tmp >> 16 & 255] << 16 ^ sbox[tmp >> 8 & 255] << 8 ^ sbox[tmp & 255];
+        if (i % keyLen === 0) {
+          tmp = tmp << 8 ^ tmp >>> 24 ^ rcon << 24;
+          rcon = rcon << 1 ^ (rcon >> 7) * 283;
+        }
+      }
+      key[i] = key[i - keyLen] ^ tmp;
+    }
+    return key;
+  }
+
+  // Encrypts one 16-byte block given as four words.
+  function aesEncryptBlock(key, input) {
+    var tables = getAesTables();
+    var t0 = tables.t[0], t1 = tables.t[1], t2 = tables.t[2], t3 = tables.t[3], sbox = tables.sbox;
+    var a = input[0] ^ key[0], b = input[1] ^ key[1], c = input[2] ^ key[2], d = input[3] ^ key[3];
+    var a2, b2, c2, i;
+    var rounds = key.length / 4 - 2;
+    var k = 4;
+    var out = [0, 0, 0, 0];
+    for (i = 0; i < rounds; i++) {
+      a2 = t0[a >>> 24] ^ t1[b >> 16 & 255] ^ t2[c >> 8 & 255] ^ t3[d & 255] ^ key[k];
+      b2 = t0[b >>> 24] ^ t1[c >> 16 & 255] ^ t2[d >> 8 & 255] ^ t3[a & 255] ^ key[k + 1];
+      c2 = t0[c >>> 24] ^ t1[d >> 16 & 255] ^ t2[a >> 8 & 255] ^ t3[b & 255] ^ key[k + 2];
+      d = t0[d >>> 24] ^ t1[a >> 16 & 255] ^ t2[b >> 8 & 255] ^ t3[c & 255] ^ key[k + 3];
+      k += 4;
+      a = a2; b = b2; c = c2;
+    }
+    for (i = 0; i < 4; i++) {
+      out[i] = sbox[a >>> 24] << 24 ^ sbox[b >> 16 & 255] << 16 ^ sbox[c >> 8 & 255] << 8 ^
+        sbox[d & 255] ^ key[k++];
+      a2 = a; a = b; b = c; c = d; d = a2;
+    }
+    return out;
+  }
+
+  // Multiplication in GF(2^128) as defined for GHASH.
+  function gcmMultiply(x, y) {
+    var z = [0, 0, 0, 0];
+    var v = y.slice(0);
+    for (var i = 0; i < 128; i++) {
+      if (x[i >>> 5] & (1 << (31 - (i & 31)))) {
+        z[0] ^= v[0]; z[1] ^= v[1]; z[2] ^= v[2]; z[3] ^= v[3];
+      }
+      var lsb = v[3] & 1;
+      v[3] = (v[3] >>> 1) | ((v[2] & 1) << 31);
+      v[2] = (v[2] >>> 1) | ((v[1] & 1) << 31);
+      v[1] = (v[1] >>> 1) | ((v[0] & 1) << 31);
+      v[0] = v[0] >>> 1;
+      if (lsb) v[0] ^= 0xe1000000;
+    }
+    return z;
+  }
+
+  function ghash(h, aad, data) {
+    var y = [0, 0, 0, 0];
+    function absorb(bytes) {
+      for (var pos = 0; pos < bytes.length; pos += 16) {
+        var block = new Uint8Array(16);
+        block.set(bytes.subarray(pos, Math.min(pos + 16, bytes.length)));
+        var words = bytesToWords(block);
+        y = gcmMultiply([y[0] ^ words[0], y[1] ^ words[1], y[2] ^ words[2], y[3] ^ words[3]], h);
+      }
+    }
+    absorb(aad);
+    absorb(data);
+    y = gcmMultiply([y[0], y[1] ^ (aad.length * 8), y[2], y[3] ^ (data.length * 8)], h);
+    return y;
+  }
+
+  // AES-GCM with a 96-bit IV and a 128-bit tag (NIST SP 800-38D). XORing the
+  // key stream is the same for both directions; returns the processed bytes
+  // and the tag computed over the ciphertext.
+  function aesGcm(keyBytes, iv, input, aad, decrypt) {
+    var key = aesExpandKey(keyBytes);
+    var h = aesEncryptBlock(key, [0, 0, 0, 0]);
+    var ivWords = bytesToWords(iv);
+    var counter = [ivWords[0], ivWords[1], ivWords[2], 1];
+    var tagMask = aesEncryptBlock(key, counter);
+    var output = new Uint8Array(input.length);
+    for (var pos = 0; pos < input.length; pos += 16) {
+      counter[3] = (counter[3] + 1) | 0;
+      var stream = wordsToBytes(aesEncryptBlock(key, counter), 4);
+      for (var i = 0; i < 16 && pos + i < input.length; i++) output[pos + i] = input[pos + i] ^ stream[i];
+    }
+    var s = ghash(h, aad, decrypt ? input : output);
+    var tag = wordsToBytes([s[0] ^ tagMask[0], s[1] ^ tagMask[1], s[2] ^ tagMask[2], s[3] ^ tagMask[3]], 4);
+    return { data: output, tag: tag };
+  }
+
+  function utf8Bytes(str) {
+    var binary = unescape(encodeURIComponent(str));
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+
+  function utf8String(bytes) {
+    var binary = '';
+    for (var i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return decodeURIComponent(escape(binary));
+  }
+
+  function base64UrlEncode(bytes) {
+    var binary = '';
+    for (var i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+/g, '');
+  }
+
+  function base64UrlDecode(text) {
+    var binary = atob(text.replace(/-/g, '+').replace(/_/g, '/') +
+      ['', '', '==', '='][text.length % 4]);
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+
+  function randomBytes(count) {
+    var bytes = new Uint8Array(count);
+    window.crypto.getRandomValues(bytes);
+    return bytes;
+  }
+
+  function canEncrypt() {
+    return !!(window.crypto && window.crypto.getRandomValues && window.Uint8Array && window.btoa);
+  }
+
+  function passwordBytes(password) {
+    return utf8Bytes(password.normalize ? password.normalize('NFC') : password);
+  }
+
+  // Encrypted backups look like
+  //   pebble-auth-backup:1:<iterations>:<salt>:<iv>:<ciphertext and tag>
+  // (base64url). Everything before the last part is authenticated as well.
+  var BACKUP_PREFIX = 'pebble-auth-backup:';
+  var BACKUP_PATTERN = /pebble-auth-backup:(\d+):(\d+):([A-Za-z0-9_-]+):([A-Za-z0-9_-]+):([A-Za-z0-9_-]+)/;
+
+  function isEncryptedBackup(text) {
+    return text.indexOf(BACKUP_PREFIX) >= 0;
+  }
+
+  function encryptBackup(text, password, onProgress, onDone) {
+    var salt = randomBytes(16);
+    var iv = randomBytes(12);
+    var header = BACKUP_PREFIX + '1:' + BACKUP_ITERATIONS + ':' + base64UrlEncode(salt) + ':' +
+      base64UrlEncode(iv);
+    pbkdf2Sha256(passwordBytes(password), salt, BACKUP_ITERATIONS, onProgress, function(key) {
+      var sealed = aesGcm(key, iv, utf8Bytes(text), utf8Bytes(header), false);
+      var payload = new Uint8Array(sealed.data.length + 16);
+      payload.set(sealed.data);
+      payload.set(sealed.tag, sealed.data.length);
+      onDone(header + ':' + base64UrlEncode(payload));
+    });
+  }
+
+  // Calls onDone({ text }) or onDone({ error }) with error 'format', 'version'
+  // or 'password'.
+  function decryptBackup(text, password, onProgress, onDone) {
+    var match = BACKUP_PATTERN.exec(text.replace(/\s+/g, ''));
+    if (!match) return onDone({ error: 'format' });
+    if (match[1] !== '1') return onDone({ error: 'version' });
+    var iterations = parseInt(match[2], 10);
+    var salt, iv, payload;
+    try {
+      salt = base64UrlDecode(match[3]);
+      iv = base64UrlDecode(match[4]);
+      payload = base64UrlDecode(match[5]);
+    } catch (e) {
+      return onDone({ error: 'format' });
+    }
+    if (!(iterations >= 1000 && iterations <= 10000000) || salt.length < 8 || iv.length !== 12 ||
+        payload.length < 16) {
+      return onDone({ error: 'format' });
+    }
+    var header = BACKUP_PREFIX + match[1] + ':' + match[2] + ':' + match[3] + ':' + match[4];
+    pbkdf2Sha256(passwordBytes(password), salt, iterations, onProgress, function(key) {
+      var data = payload.subarray(0, payload.length - 16);
+      var opened = aesGcm(key, iv, data, utf8Bytes(header), true);
+      var diff = 0;
+      for (var i = 0; i < 16; i++) diff |= opened.tag[i] ^ payload[data.length + i];
+      if (diff) return onDone({ error: 'password' });
+      try {
+        onDone({ text: utf8String(opened.data) });
+      } catch (e) {
+        onDone({ error: 'format' });
+      }
+    });
+  }
+
   // --- DOM helpers ---
 
   function el(tag, props, children) {
@@ -316,6 +701,12 @@ module.exports = function() {
     return node;
   }
 
+  function field(label, control, extraClass) {
+    return el('label', { className: 'field' + (extraClass || '') }, [
+      el('span', { className: 'field-label', text: label }), control
+    ]);
+  }
+
   function iconButton(act, icon, label, disabled) {
     return el('button', { type: 'button', className: 'chip-btn icon-btn', 'data-act': act,
       'aria-label': label, title: label, disabled: disabled, html: ICONS[icon] });
@@ -330,9 +721,12 @@ module.exports = function() {
 
   // Scrolls a row into the area above the sticky save bar.
   function revealRow(index) {
-    var row = ui.list.querySelector('[data-idx="' + index + '"]');
-    if (!row) return;
-    var rect = row.getBoundingClientRect();
+    revealElement(ui.list.querySelector('[data-idx="' + index + '"]'));
+  }
+
+  function revealElement(node) {
+    if (!node) return;
+    var rect = node.getBoundingClientRect();
     var bottom = window.innerHeight - (ui.saveBar ? ui.saveBar.offsetHeight : 0) - 12;
     if (rect.bottom > bottom) window.scrollBy(0, Math.min(rect.bottom - bottom, rect.top - 12));
     else if (rect.top < 12) window.scrollBy(0, rect.top - 12);
@@ -412,6 +806,7 @@ module.exports = function() {
     ui.empty.classList.toggle('hide', accounts.length > 0);
     ui.foot.classList.toggle('hide', accounts.length === 0);
     disarmClearAll();
+    if (state.backupOf !== null && state.backupOf !== serializeAccounts()) hideBackupResult();
 
     if (state.renaming >= 0) {
       var input = ui.list.querySelector('.acc-rename');
@@ -725,6 +1120,18 @@ module.exports = function() {
 
   function importLinks() {
     var text = ui.importText.value;
+    if (isEncryptedBackup(text)) {
+      // Hand an encrypted backup over to the restore form, which asks for the password.
+      ui.importText.value = '';
+      showMessage(ui.importMsg, null);
+      ui.restoreText.value = text;
+      updateRestoreFields();
+      selectBackupTab('restore');
+      showMessage(ui.restoreMsg, 'warning', 'This is an encrypted backup. Enter its password to restore it.');
+      revealElement(ui.restorePasswordField);
+      ui.restorePassword.focus();
+      return false;
+    }
     if (!/otpauth/i.test(text)) {
       reported.importText = text;
       showMessage(ui.importMsg, 'error', text.replace(/\s/g, '') ?
@@ -757,6 +1164,10 @@ module.exports = function() {
   // them automatically, and only keep the page open if something needs a
   // look. Input that was already reported doesn't block saving a second time.
   function addPendingInput() {
+    if (state.busy) {
+      toast('Please wait until the backup is ready.');
+      return false;
+    }
     var ok = true;
     var text = ui.importText ? ui.importText.value : '';
     if (/\S/.test(text) && text !== reported.importText) {
@@ -772,18 +1183,35 @@ module.exports = function() {
         ok = false;
       }
     }
+    var restore = ui.restoreText ? ui.restoreText.value : '';
+    if (/\S/.test(restore) && restore !== reported.restore) {
+      reported.restore = restore;
+      selectBackupTab('restore');
+      showMessage(ui.restoreMsg, 'warning', 'This backup hasn\'t been restored yet. Tap \u201cRestore\u201d, ' +
+        'or save again to continue without it.');
+      revealElement(ui.restoreMsg);
+      ok = false;
+    }
     return ok;
   }
 
-  function selectTab(name) {
-    ui.tabs.forEach(function(tab) {
+  function selectTabIn(tabs, panels, name) {
+    tabs.forEach(function(tab) {
       var selected = tab.getAttribute('data-tab') === name;
       tab.setAttribute('aria-selected', selected ? 'true' : 'false');
       tab.tabIndex = selected ? 0 : -1;
     });
-    ui.panels.forEach(function(panel) {
+    panels.forEach(function(panel) {
       panel.classList.toggle('hide', panel.getAttribute('data-panel') !== name);
     });
+  }
+
+  function selectTab(name) {
+    selectTabIn(ui.tabs, ui.panels, name);
+  }
+
+  function selectBackupTab(name) {
+    selectTabIn(ui.backupTabs, ui.backupPanels, name);
   }
 
   // --- Components ---
@@ -891,12 +1319,6 @@ module.exports = function() {
       ui.manualMsg = el('div', { className: 'form-msg', role: 'status', 'aria-live': 'polite' });
       var addButton = el('button', { type: 'button', className: 'btn-primary', text: 'Add account' });
 
-      function field(label, control, extraClass) {
-        return el('label', { className: 'field' + (extraClass || '') }, [
-          el('span', { className: 'field-label', text: label }), control
-        ]);
-      }
-
       ui.panels = [
         el('div', { className: 'panel', 'data-panel': 'import', role: 'tabpanel' }, [
           field('otpauth:// links', ui.importText),
@@ -946,6 +1368,385 @@ module.exports = function() {
           input.parentNode.classList.remove('is-invalid');
         });
       });
+    }
+  });
+
+  // --- Backup and restore ---
+
+  // A backup without password is a list of standard otpauth:// links, so
+  // other authenticator apps can import it as well.
+  function accountToLink(account) {
+    var name = encodeURIComponent(account.ACCOUNT_NAME);
+    var label = account.ACCOUNT_LABEL ? name + ':' + encodeURIComponent(account.ACCOUNT_LABEL) : name;
+    return 'otpauth://totp/' + label + '?secret=' + account.ACCOUNT_SECRET + '&issuer=' + name +
+      '&algorithm=SHA1&digits=' + account.ACCOUNT_DIGITS + '&period=' + account.ACCOUNT_PERIOD;
+  }
+
+  // Shows a working label with progress on `button` while `work` runs.
+  function runBusy(button, label, work, then) {
+    state.busy = true;
+    var original = button.textContent;
+    button.classList.add('is-busy');
+    button.textContent = label + '\u2026';
+    setTimeout(function() { // let the label appear before the work starts
+      work(function(fraction) {
+        button.textContent = label + '\u2026 ' + Math.round(fraction * 100) + ' %';
+      }, function(result) {
+        state.busy = false;
+        button.classList.remove('is-busy');
+        button.textContent = original;
+        then(result);
+      });
+    }, 30);
+  }
+
+  function hideBackupResult() {
+    state.backupOf = null;
+    if (ui.backupResult) ui.backupResult.classList.add('hide');
+  }
+
+  function markInvalid(input, invalid) {
+    input.parentNode.classList.toggle('is-invalid', invalid);
+  }
+
+  function createBackup() {
+    if (state.busy) return;
+    var count = state.accounts.length;
+    if (!count) {
+      showMessage(ui.backupMsg, 'error', 'There are no accounts to back up yet.');
+      return;
+    }
+    var text = state.accounts.map(accountToLink).join('\n');
+    var listState = serializeAccounts();
+    if (!ui.encryptToggle.checked) {
+      showMessage(ui.backupMsg, null);
+      showBackup(text, false, listState);
+      return;
+    }
+    var password = ui.backupPassword.value;
+    markInvalid(ui.backupPassword, false);
+    markInvalid(ui.backupRepeat, false);
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      markInvalid(ui.backupPassword, true);
+      showMessage(ui.backupMsg, 'error', 'Use a password with at least ' + MIN_PASSWORD_LENGTH + ' characters.');
+      ui.backupPassword.focus();
+      return;
+    }
+    if (password !== ui.backupRepeat.value) {
+      markInvalid(ui.backupRepeat, true);
+      showMessage(ui.backupMsg, 'error', 'The two passwords don\'t match.');
+      ui.backupRepeat.focus();
+      return;
+    }
+    showMessage(ui.backupMsg, null);
+    runBusy(ui.backupButton, 'Encrypting', function(onProgress, onDone) {
+      encryptBackup(text, password, onProgress, onDone);
+    }, function(backup) {
+      ui.backupPassword.value = '';
+      ui.backupRepeat.value = '';
+      showBackup(backup, true, listState);
+    });
+  }
+
+  function showBackup(text, encrypted, listState) {
+    var count = state.accounts.length;
+    state.backupOf = listState;
+    ui.backupOutput.value = text;
+    ui.backupNote.className = 'form-msg ' + (encrypted ? 'is-success' : 'is-warning');
+    ui.backupNote.textContent = (count === 1 ? '1 account. ' : count + ' accounts. ') + (encrypted ?
+      'Encrypted with your password. Without the password this backup can\'t be opened.' :
+      'Not encrypted: anyone who can read this text can create your codes. Keep it somewhere ' +
+      'safe, for example in a password manager.');
+    ui.backupResult.classList.remove('hide');
+    revealElement(ui.backupResult);
+  }
+
+  // Copies through a temporary read-only text field: the page is no secure
+  // context, so the asynchronous Clipboard API isn't available.
+  function copyBackup() {
+    var text = ui.backupOutput.value;
+    var helper = el('textarea', { readonly: true });
+    helper.value = text;
+    helper.style.position = 'fixed';
+    helper.style.top = '-1000px';
+    helper.style.opacity = '0';
+    document.body.appendChild(helper);
+    helper.select();
+    helper.setSelectionRange(0, text.length);
+    var copied = false;
+    try {
+      copied = document.execCommand('copy');
+    } catch (e) {
+      copied = false;
+    }
+    document.body.removeChild(helper);
+    if (copied) {
+      toast('Backup copied', { type: 'success' });
+    } else {
+      ui.backupOutput.focus();
+      ui.backupOutput.setSelectionRange(0, text.length);
+      toast('Select the text and copy it with your phone\'s menu.');
+    }
+  }
+
+  function updateRestoreFields() {
+    var encrypted = isEncryptedBackup(ui.restoreText.value);
+    ui.restorePasswordField.classList.toggle('hide', !encrypted);
+    disarmRestore();
+  }
+
+  function selectRestoreMode(mode) {
+    state.restoreMode = mode;
+    ui.restoreModes.forEach(function(button) {
+      button.setAttribute('aria-checked', button.getAttribute('data-mode') === mode ? 'true' : 'false');
+    });
+    ui.replaceHint.classList.toggle('hide', mode !== 'replace');
+    disarmRestore();
+  }
+
+  function disarmRestore() {
+    clearTimeout(restoreTimer);
+    state.restoreArmed = false;
+    if (ui.restoreButton && !state.busy) {
+      ui.restoreButton.classList.remove('is-danger');
+      ui.restoreButton.textContent = 'Restore';
+    }
+  }
+
+  function restoreBackup() {
+    if (state.busy) return;
+    var raw = ui.restoreText.value;
+    var encrypted = isEncryptedBackup(raw);
+    if (!/\S/.test(raw)) {
+      showMessage(ui.restoreMsg, 'error', 'Paste a backup or otpauth:// links first.');
+      return;
+    }
+    if (!encrypted && !/otpauth/i.test(raw)) {
+      reported.restore = raw;
+      showMessage(ui.restoreMsg, 'error', 'No backup found. A backup starts with \u201cotpauth://\u201d ' +
+        'or \u201cpebble-auth-backup:\u201d.');
+      return;
+    }
+    if (encrypted && !ui.restorePassword.value) {
+      showMessage(ui.restoreMsg, 'error', 'Enter the password of this backup.');
+      ui.restorePassword.focus();
+      return;
+    }
+    if (state.restoreMode === 'replace' && state.accounts.length && !state.restoreArmed) {
+      state.restoreArmed = true;
+      ui.restoreButton.classList.add('is-danger');
+      ui.restoreButton.textContent = 'Tap again to replace all ' + state.accounts.length + ' accounts';
+      clearTimeout(restoreTimer);
+      restoreTimer = setTimeout(disarmRestore, 5000);
+      return;
+    }
+    disarmRestore();
+    showMessage(ui.restoreMsg, null);
+    if (!encrypted) {
+      applyRestore(raw);
+      return;
+    }
+    var password = ui.restorePassword.value;
+    runBusy(ui.restoreButton, 'Decrypting', function(onProgress, onDone) {
+      decryptBackup(raw, password, onProgress, onDone);
+    }, function(result) {
+      if (result.text !== undefined) {
+        applyRestore(result.text);
+        return;
+      }
+      reported.restore = raw;
+      if (result.error === 'password') {
+        showMessage(ui.restoreMsg, 'error', 'Wrong password, or the backup was changed.');
+        ui.restorePassword.focus();
+        ui.restorePassword.select();
+      } else if (result.error === 'version') {
+        showMessage(ui.restoreMsg, 'error', 'This backup was made with a newer version of the app. ' +
+          'Update the app and try again.');
+      } else {
+        showMessage(ui.restoreMsg, 'error', 'This backup is incomplete or damaged. Copy the whole text, ' +
+          'starting with \u201cpebble-auth-backup:\u201d.');
+      }
+    });
+  }
+
+  function applyRestore(text) {
+    var replace = state.restoreMode === 'replace';
+    var result = parseLinks(text, replace ? [] : state.accounts);
+    var count = result.added.length;
+    if (!count) {
+      reported.restore = ui.restoreText.value;
+      showMessage(ui.restoreMsg, 'error', 'Nothing was restored.' +
+        (result.skipped.length ? ' Skipped ' + result.skipped.length + ':' : ''), result.skipped);
+      return;
+    }
+    var previous = state.accounts;
+    state.accounts = replace ? result.added : state.accounts.concat(result.added);
+    state.expanded = -1;
+    state.renaming = -1;
+    renderAccounts();
+    ui.restoreText.value = '';
+    ui.restorePassword.value = '';
+    updateRestoreFields();
+    reported.restore = null;
+
+    var done = (replace ? 'Replaced your list with ' : 'Restored ') + count +
+      (count === 1 ? ' account.' : ' accounts.');
+    var title = done + ' Tap \u201cSave to watch\u201d to send ' + (count === 1 ? 'it' : 'them') +
+      ' to your watch.';
+    if (result.skipped.length) {
+      showMessage(ui.restoreMsg, 'warning', title + ' Skipped ' + result.skipped.length + ':', result.skipped);
+    } else {
+      showMessage(ui.restoreMsg, 'success', title);
+    }
+    toast(done, { action: 'Undo', onAction: function() {
+      state.accounts = previous;
+      renderAccounts();
+      showMessage(ui.restoreMsg, null);
+    } });
+  }
+
+  function onRestoreFile() {
+    var file = ui.restoreFile.files && ui.restoreFile.files[0];
+    ui.restoreFile.value = '';
+    if (!file) return;
+    if (file.size > 500000) {
+      showMessage(ui.restoreMsg, 'error', 'This file is too large to be a backup.');
+      return;
+    }
+    var reader = new FileReader();
+    reader.onload = function() {
+      ui.restoreText.value = String(reader.result || '');
+      updateRestoreFields();
+      showMessage(ui.restoreMsg, null);
+    };
+    reader.onerror = function() {
+      showMessage(ui.restoreMsg, 'error', 'The file could not be read.');
+    };
+    reader.readAsText(file);
+  }
+
+  clayConfig.registerComponent({
+    name: 'auth-backup',
+    template: '<div class="component auth-card auth-backup"></div>',
+    manipulator: displayOnly,
+    initialize: function() {
+      var root = this.$element[0];
+      var encryptionAvailable = canEncrypt();
+
+      ui.backupTabs = [
+        el('button', { type: 'button', role: 'tab', 'data-tab': 'create', text: 'Create backup' }),
+        el('button', { type: 'button', role: 'tab', 'data-tab': 'restore', text: 'Restore' })
+      ];
+
+      ui.encryptToggle = el('input', { type: 'checkbox', className: 'switch-input',
+        disabled: !encryptionAvailable });
+      ui.backupPassword = el('input', { type: 'password', autocomplete: 'new-password',
+        enterkeyhint: 'next' });
+      ui.backupRepeat = el('input', { type: 'password', autocomplete: 'new-password',
+        enterkeyhint: 'done' });
+      ui.passwordFields = el('div', { className: 'hide' }, [
+        field('Password', ui.backupPassword),
+        field('Repeat password', ui.backupRepeat),
+        el('p', { className: 'field-hint', text: 'At least ' + MIN_PASSWORD_LENGTH + ' characters. ' +
+          'A long password, for example four random words, is best. If you forget it, the backup ' +
+          'can\'t be opened.' })
+      ]);
+      ui.backupMsg = el('div', { className: 'form-msg', role: 'status', 'aria-live': 'polite' });
+      ui.backupButton = el('button', { type: 'button', className: 'btn-primary', text: 'Create backup' });
+      ui.backupOutput = el('textarea', { className: 'backup-output', readonly: true, rows: '5',
+        'aria-label': 'Backup', spellcheck: 'false' });
+      ui.backupNote = el('div', { className: 'form-msg', role: 'status' });
+      var copyButton = el('button', { type: 'button', className: 'btn-primary', text: 'Copy backup' });
+      ui.backupResult = el('div', { className: 'backup-result hide' }, [
+        field('Your backup', ui.backupOutput),
+        ui.backupNote,
+        copyButton
+      ]);
+
+      ui.restoreText = el('textarea', { rows: '4', autocomplete: 'off', autocorrect: 'off',
+        autocapitalize: 'off', spellcheck: 'false',
+        placeholder: 'pebble-auth-backup:\u2026 or otpauth://totp/\u2026' });
+      ui.restoreFile = el('input', { type: 'file', accept: '.txt,text/plain', className: 'hide' });
+      var fileButton = el('button', { type: 'button', className: 'chip-btn', text: 'Open a file\u2026' });
+      ui.restorePassword = el('input', { type: 'password', autocomplete: 'current-password',
+        enterkeyhint: 'done' });
+      ui.restorePasswordField = el('div', { className: 'hide' }, [
+        field('Backup password', ui.restorePassword)
+      ]);
+      ui.restoreModes = [
+        el('button', { type: 'button', role: 'radio', 'data-mode': 'add', text: 'Add to my list' }),
+        el('button', { type: 'button', role: 'radio', 'data-mode': 'replace', text: 'Replace my list' })
+      ];
+      ui.replaceHint = el('p', { className: 'field-hint hide', text: 'Replacing removes all accounts ' +
+        'that are not in the backup. Nothing changes on the watch until you save.' });
+      ui.restoreMsg = el('div', { className: 'form-msg', role: 'status', 'aria-live': 'polite' });
+      ui.restoreButton = el('button', { type: 'button', className: 'btn-primary', text: 'Restore' });
+
+      ui.backupPanels = [
+        el('div', { className: 'panel', 'data-panel': 'create', role: 'tabpanel' }, [
+          el('p', { className: 'field-hint backup-intro', text: 'Saves your accounts as text, for ' +
+            'example for a password manager. The backup consists of standard otpauth:// links that ' +
+            'other authenticator apps can import too.' }),
+          el('label', { className: 'switch-row' }, [
+            el('span', { className: 'switch-label', text: 'Protect with a password' }),
+            ui.encryptToggle,
+            el('span', { className: 'switch', 'aria-hidden': 'true' })
+          ]),
+          encryptionAvailable ? ui.passwordFields :
+            el('p', { className: 'field-hint', text: 'Encryption isn\'t available on this device.' }),
+          ui.backupMsg,
+          ui.backupButton,
+          ui.backupResult
+        ]),
+        el('div', { className: 'panel hide', 'data-panel': 'restore', role: 'tabpanel' }, [
+          field('Backup or otpauth:// links', ui.restoreText),
+          el('div', { className: 'btn-row' }, [fileButton, ui.restoreFile]),
+          ui.restorePasswordField,
+          el('span', { className: 'field-label', text: 'Restore mode' }),
+          el('div', { className: 'segmented segmented-inline', role: 'radiogroup',
+            'aria-label': 'Restore mode' }, ui.restoreModes),
+          ui.replaceHint,
+          ui.restoreMsg,
+          ui.restoreButton
+        ])
+      ];
+
+      root.appendChild(el('div', { className: 'card-head' }, [el('h2', { text: 'Backup' })]));
+      root.appendChild(el('div', { className: 'segmented', role: 'tablist' }, ui.backupTabs));
+      ui.backupPanels.forEach(function(panel) { root.appendChild(panel); });
+      selectBackupTab('create');
+      selectRestoreMode('add');
+
+      ui.backupTabs.forEach(function(tab) {
+        tab.addEventListener('click', function() { selectBackupTab(tab.getAttribute('data-tab')); });
+      });
+      ui.encryptToggle.addEventListener('change', function() {
+        ui.passwordFields.classList.toggle('hide', !ui.encryptToggle.checked);
+        hideBackupResult();
+        showMessage(ui.backupMsg, null);
+      });
+      ui.backupButton.addEventListener('click', createBackup);
+      copyButton.addEventListener('click', copyBackup);
+      ui.backupPassword.addEventListener('keydown', function(event) {
+        if (isEnter(event)) ui.backupRepeat.focus();
+      });
+      ui.backupRepeat.addEventListener('keydown', function(event) {
+        if (isEnter(event)) createBackup();
+      });
+      [ui.backupPassword, ui.backupRepeat].forEach(function(input) {
+        input.addEventListener('input', function() { markInvalid(input, false); });
+      });
+
+      ui.restoreText.addEventListener('input', updateRestoreFields);
+      fileButton.addEventListener('click', function() { ui.restoreFile.click(); });
+      ui.restoreFile.addEventListener('change', onRestoreFile);
+      ui.restoreModes.forEach(function(button) {
+        button.addEventListener('click', function() { selectRestoreMode(button.getAttribute('data-mode')); });
+      });
+      ui.restorePassword.addEventListener('keydown', function(event) {
+        if (isEnter(event)) restoreBackup();
+      });
+      ui.restoreButton.addEventListener('click', restoreBackup);
     }
   });
 
@@ -1141,6 +1942,29 @@ module.exports = function() {
     'padding:6px 4px;margin:0;min-width:0;text-transform:none;letter-spacing:normal;',
     '-webkit-tap-highlight-color:transparent}',
 
+    '#main-form .is-busy{pointer-events:none;opacity:.8}',
+    '#main-form .btn-primary.is-danger{background:var(--danger)}',
+    '#main-form .segmented button[aria-checked="true"]{background:var(--tab-on);color:var(--text);',
+    'box-shadow:0 1px 3px rgba(0,0,0,.14)}',
+    '#main-form .segmented-inline{margin:0 0 14px}',
+    '.backup-intro{margin:0 0 10px!important}',
+    '#main-form label.switch-row{display:flex;align-items:center;justify-content:space-between;',
+    'padding:6px 0 16px;border-radius:0;cursor:pointer}',
+    '.switch-label{font-size:16px;color:var(--text)}',
+    '.switch-input{position:absolute;opacity:0;width:1px;height:1px}',
+    '.switch{position:relative;flex:none;width:51px;height:31px;border-radius:31px;',
+    'background:var(--switch-off);transition:background-color .2s}',
+    '.switch:after{content:"";position:absolute;top:2px;left:2px;width:27px;height:27px;border-radius:50%;',
+    'background:#fff;box-shadow:0 2px 5px rgba(0,0,0,.2),0 0 1px rgba(0,0,0,.25);transition:transform .2s}',
+    '.switch-input:checked+.switch{background:var(--accent)}',
+    '.switch-input:checked+.switch:after{transform:translateX(20px)}',
+    '.switch-input:focus-visible+.switch{outline:2px solid var(--accent);outline-offset:2px}',
+    '.switch-input:disabled+.switch{opacity:.4}',
+    '.backup-result{margin-top:18px}',
+    '.field .backup-output{min-height:120px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,',
+    '"Roboto Mono",monospace;font-size:13px;word-break:break-all;resize:none}',
+    '.btn-row{display:flex;gap:10px;margin:-4px 0 14px}',
+
     '@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}'
   ].join('');
 
@@ -1169,6 +1993,11 @@ module.exports = function() {
       syncSaveBarHeight();
       window.addEventListener('resize', syncSaveBarHeight);
     }
+
+    // Enter in a single-line field would submit the form and close the page.
+    clayConfig.$rootContainer[0].addEventListener('keydown', function(event) {
+      if (isEnter(event) && event.target.tagName === 'INPUT') event.preventDefault();
+    });
 
     var loop = clayConfig.getItemByMessageKey('SETTING_LOOP_LIST');
     if (loop) loop.on('change', updateDirty);
