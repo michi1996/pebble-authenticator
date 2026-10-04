@@ -9,7 +9,7 @@ Find it on the [Pebble App Store](https://apps.repebble.com/864fb2cb5c0444b088db
 * **Fully Offline & Secure:** Your secret keys are stored strictly locally on your smartphone (using `localStorage`) and on the Pebble watch itself (using `persist_write_data`). No cloud sync, no tracking, and no external servers.
 * **Easy Import:** Quickly add multiple accounts at once by pasting standard `otpauth://` export links into the settings page. Links that can't work on the watch (HOTP, SHA256/SHA512, duplicates, invalid keys) are skipped with an explanation.
 * **Wide Compatibility:** Supports both 6 and 8 digit codes in 30 or 60 second validity periods.
-* **Manual Entry:** Add accounts manually by entering the Account Name and the Base32 Secret Key. The key is checked before it is added.
+* **Manual Entry:** Add accounts manually by entering the Account Name and the Base32 Secret Key. The key is checked before it is added; keys of up to 256 characters are supported.
 * **High Capacity:** Stores and manages up to 100 different 2FA accounts natively on your watch (see [Storage](#storage)).
 * **Clean Interface:** Optimized for readability on Pebble displays (especially Pebble Time 2), featuring large, bold fonts and an animated progress bar to show when the next code will arrive. Swipe to scroll on touch watches.
 * **Modern Settings Page:** Light and dark mode, reorder accounts by dragging or with the arrow buttons, rename and delete them (with undo).

@@ -3,12 +3,34 @@
 #include "sha1.h"
 #include "base32.h"
 
+int totp_key_from_base32(const char *secret, uint8_t *key) {
+  // static: called from the AppMessage handler, keep the watch's stack small
+  static uint8_t decoded[TOTP_MAX_SECRET_CHARS * 5 / 8 + 1];
+  if (strlen(secret) > TOTP_MAX_SECRET_CHARS) return -1;
+
+  int len = base32_decode((const uint8_t *)secret, decoded, sizeof(decoded));
+  if (len <= 0) return -1;
+  if (len > TOTP_MAX_KEY_LEN) {
+    sha1nfo s;
+    sha1_init(&s);
+    sha1_write(&s, (const char *)decoded, len);
+    memcpy(key, sha1_result(&s), HASH_LENGTH);
+    return HASH_LENGTH;
+  }
+  memcpy(key, decoded, len);
+  return len;
+}
+
 bool totp_format_code(const char *secret, uint8_t period, uint8_t digits, time_t now,
                       char *out, size_t out_len) {
   uint8_t key[128];
   int key_len = base32_decode((const uint8_t *)secret, key, sizeof(key));
+  return totp_format_code_key(key, key_len > 0 ? key_len : 0, period, digits, now, out, out_len);
+}
 
-  if (key_len <= 0) {
+bool totp_format_code_key(const uint8_t *key, size_t key_len, uint8_t period, uint8_t digits,
+                          time_t now, char *out, size_t out_len) {
+  if (key_len == 0) {
     // If the secret is invalid, display an error
     snprintf(out, out_len, "ERR 001");
     return false;
