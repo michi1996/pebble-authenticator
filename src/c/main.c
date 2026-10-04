@@ -6,12 +6,17 @@
 #define MAX_NAME_LEN 32
 #define MAX_SECRET_LEN 80
 
+// Set in Account.digits when `secret` holds the decoded key (length byte, then
+// the key) instead of Base32 text. Older versions stored the text, which only
+// fits 79 characters; the decoded key fits any secret (see totp.h).
+#define ACCOUNT_KEY_BINARY 0x80
+
 #define PERSIST_KEY_NUM_ACCOUNTS 100
 #define PERSIST_KEY_ACCOUNT_BASE 200
 #define PERSIST_KEY_LOOP_LIST 300 // Dedicated persist key for the loop setting
 
 // AppMessage buffers are sized for the largest message actually exchanged:
-// one account (index, name, secret, period, digits; ~170 bytes) inbound and the
+// one account (index, name, secret, period, digits; ~350 bytes) inbound and the
 // sync result outbound. app_message_*_size_maximum() would reserve ~8 KB per
 // buffer with current phone apps, which doesn't fit next to the account table
 // in Aplite's 24 KB of app RAM.
@@ -54,10 +59,12 @@
 // Persisted as-is with persist_write_data(): don't change the layout.
 typedef struct {
   char name[MAX_NAME_LEN];
-  char secret[MAX_SECRET_LEN];
+  char secret[MAX_SECRET_LEN]; // Base32 text, or the key (see ACCOUNT_KEY_BINARY)
   uint8_t period; // TOTP validity window in seconds (e.g. 30 or 60)
-  uint8_t digits; // Code length (6 or 8)
+  uint8_t digits; // Code length (6 or 8), plus ACCOUNT_KEY_BINARY
 } Account;
+
+_Static_assert(TOTP_MAX_KEY_LEN + 1 <= MAX_SECRET_LEN, "the decoded key must fit into Account.secret");
 
 static Window *s_main_window;
 static MenuLayer *s_menu_layer;
@@ -83,10 +90,18 @@ static bool s_touched_since_step = false;
 // Makes a record read from storage safe to use.
 static void sanitize_account(Account *account) {
   account->name[MAX_NAME_LEN - 1] = '\0';
-  account->secret[MAX_SECRET_LEN - 1] = '\0';
   utf8_trim_incomplete(account->name);
   if (account->period == 0) account->period = 30;
-  if (account->digits != 6 && account->digits != 8) account->digits = 6;
+
+  const bool binary = account->digits & ACCOUNT_KEY_BINARY;
+  uint8_t digits = account->digits & ~ACCOUNT_KEY_BINARY;
+  if (digits != 6 && digits != 8) digits = 6;
+  if (binary) {
+    if ((uint8_t)account->secret[0] > TOTP_MAX_KEY_LEN) account->secret[0] = 0; // shows ERR 001
+  } else {
+    account->secret[MAX_SECRET_LEN - 1] = '\0';
+  }
+  account->digits = digits | (binary ? ACCOUNT_KEY_BINARY : 0);
 }
 
 static void load_accounts(void) {
@@ -161,13 +176,32 @@ static void store_account(int32_t index, const Tuple *name, const Tuple *secret,
     return;
   }
 
+  // static: keeps the watch's stack small
+  static char secret_text[TOTP_MAX_SECRET_CHARS + 1];
+  uint8_t key_bytes[TOTP_MAX_KEY_LEN];
+
   Account account;
   memset(&account, 0, sizeof(account));
   tuple_copy_string(account.name, sizeof(account.name), name);
-  tuple_copy_string(account.secret, sizeof(account.secret), secret);
   const int32_t period_value = period ? tuple_int(period) : 30;
   account.period = (period_value > 0 && period_value <= UINT8_MAX) ? (uint8_t)period_value : 30;
   account.digits = (digits && tuple_int(digits) == 8) ? 8 : 6;
+
+  // A cut-off secret would give wrong codes: show ERR 001 for one that is too long.
+  if (secret->length > sizeof(secret_text)) {
+    secret_text[0] = '\0';
+  } else {
+    tuple_copy_string(secret_text, sizeof(secret_text), secret);
+  }
+  const int key_len = totp_key_from_base32(secret_text, key_bytes);
+  if (key_len > 0) {
+    account.secret[0] = (char)key_len;
+    memcpy(&account.secret[1], key_bytes, key_len);
+    account.digits |= ACCOUNT_KEY_BINARY;
+  } else {
+    // Keep the invalid text, so the row shows ERR 001 instead of vanishing.
+    utf8_copy(account.secret, sizeof(account.secret), secret_text, sizeof(secret_text));
+  }
 
   const uint32_t key = PERSIST_KEY_ACCOUNT_BASE + index;
   if (persist_write_data(key, &account, sizeof(account)) < 0) {
@@ -255,8 +289,14 @@ static void menu_draw_row_callback(GContext* ctx, const Layer *cell_layer, MenuI
   Account *account = &s_accounts[cell_index->row];
   time_t now = time(NULL);
   char code_buffer[12];
-  totp_format_code(account->secret, account->period, account->digits, now,
-                   code_buffer, sizeof(code_buffer));
+  const uint8_t digits = account->digits & ~ACCOUNT_KEY_BINARY;
+  if (account->digits & ACCOUNT_KEY_BINARY) {
+    totp_format_code_key((const uint8_t *)&account->secret[1], (uint8_t)account->secret[0],
+                         account->period, digits, now, code_buffer, sizeof(code_buffer));
+  } else {
+    totp_format_code(account->secret, account->period, digits, now,
+                     code_buffer, sizeof(code_buffer));
+  }
 
   bool is_selected = menu_cell_layer_is_highlighted(cell_layer);
 

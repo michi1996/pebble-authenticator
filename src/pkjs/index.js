@@ -9,7 +9,7 @@ var clay = new Clay(clayConfig, customClay, { autoHandleEvents: false });
 
 var MAX_ACCOUNTS = 100;
 var MAX_NAME_BYTES = 31;      // the watch stores names in 32 bytes
-var MAX_SECRET_LENGTH = 79;   // and secrets in 80
+var MAX_SECRET_LENGTH = 256;  // longest Base32 secret the watch accepts
 var MAX_ATTEMPTS = 4;         // per message, before giving up
 var RETRY_DELAY_MS = 1200;
 var RESULT_TIMEOUT_MS = 4000;

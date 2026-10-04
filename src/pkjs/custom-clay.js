@@ -6,7 +6,7 @@ module.exports = function() {
 
   var MAX_ACCOUNTS = 100;
   var MAX_NAME_BYTES = 31;     // the watch keeps 31 bytes of UTF-8 per name
-  var MAX_SECRET_LENGTH = 79;  // and 79 Base32 characters per secret
+  var MAX_SECRET_LENGTH = 256; // longest Base32 secret the watch accepts
   var MAX_LABEL_LENGTH = 64;
   var BACKUP_ITERATIONS = 600000; // PBKDF2-SHA256, as recommended by OWASP
   var MIN_PASSWORD_LENGTH = 8;
@@ -128,7 +128,7 @@ module.exports = function() {
     }
     if (secret.length < 2) return 'The secret key is too short.';
     if (secret.length > MAX_SECRET_LENGTH) {
-      return 'The secret key is too long for the watch (max. ' + MAX_SECRET_LENGTH + ' characters).';
+      return 'The secret key is too long (max. ' + MAX_SECRET_LENGTH + ' characters).';
     }
     return '';
   }
