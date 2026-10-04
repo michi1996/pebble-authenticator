@@ -1005,7 +1005,7 @@ module.exports = function() {
     '.hero-icon{flex:0 0 52px;height:52px;border-radius:15px;display:flex;align-items:center;',
     'justify-content:center;background:linear-gradient(145deg,#ff8040,#cf3a0b);',
     'box-shadow:0 8px 20px rgba(207,58,11,.28)}',
-    '.hero-icon img{display:block;width:32px;height:32px;filter:brightness(0) invert(1)}',
+    '.hero-icon img{display:block;width:32px;height:32px}',
     '#main-form .hero h1{font-size:26px;line-height:1.15;font-weight:700;letter-spacing:-.02em}',
     '.hero p{color:var(--text-2);font-size:15px;margin-top:2px!important}',
     '.watch-chip{display:inline-flex;align-items:center;gap:6px;margin-top:14px;padding:6px 12px 6px 9px;',
