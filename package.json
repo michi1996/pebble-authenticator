@@ -1,10 +1,13 @@
 {
     "author": "Achi",
     "dependencies": {
-        "@rebble/clay": "^1.0.8"
+        "@rebble/clay": "^1.1.0"
     },
-    "keywords": [],
+    "keywords": [
+        "pebble-app"
+    ],
     "name": "authenticator",
+    "private": true,
     "pebble": {
         "capabilities": [
             "configurable"
@@ -12,12 +15,15 @@
         "displayName": "Authenticator",
         "enableMultiJS": true,
         "messageKeys": [
-            "CLEAR_ACCOUNTS",
+            "SYNC_BEGIN",
             "ACCOUNT_NAME",
             "ACCOUNT_SECRET",
             "ACCOUNT_PERIOD",
             "ACCOUNT_DIGITS",
-            "SETTING_LOOP_LIST"
+            "SETTING_LOOP_LIST",
+            "ACCOUNT_INDEX",
+            "SYNC_END",
+            "SYNC_RESULT"
         ],
         "projectType": "native",
         "resources": {
@@ -46,5 +52,5 @@
             "watchface": false
         }
     },
-    "version": "1.4.3"
+    "version": "1.5.0"
 }

@@ -1,113 +1,36 @@
 [
   {
-    "type": "heading",
-    "defaultValue": "1. Import"
+    "type": "auth-header"
   },
   {
-    "type": "input",
-    "id": "import_text",
-    "label": "Import",
-    "description": "Paste your otpauth:// links here. Multiple entrys are allowed."
-  },
-  {
-    "type": "button",
-    "id": "btn_import",
-    "defaultValue": "Import"
-  },
-  {
-    "type": "heading",
-    "defaultValue": "2. Add Manually"
-  },
-  {
-    "type": "input",
-    "id": "manual_name",
-    "label": "Account Name"
-  },
-  {
-    "type": "input",
-    "id": "manual_secret",
-    "label": "Secret Key"
-  },
-  {
-    "type": "select",
-    "id": "manual_period",
-    "label": "Code Validity",
-    "defaultValue": "30",
-    "options": [
-      { "label": "30 seconds (standard)", "value": "30" },
-      { "label": "60 seconds", "value": "60" }
-    ]
-  },
-  {
-    "type": "select",
-    "id": "manual_digits",
-    "label": "Code Length",
-    "defaultValue": "6",
-    "options": [
-      { "label": "6 digits (standard)", "value": "6" },
-      { "label": "8 digits", "value": "8" }
-    ]
-  },
-  {
-    "type": "button",
-    "id": "btn_add",
-    "defaultValue": "Add"
-  },
-  {
-    "type": "heading",
-    "defaultValue": "3. Manage Accounts"
-  },
-  {
-    "type": "select",
-    "id": "account_dropdown",
-    "label": "Select Account",
-    "options": [
-      { "label": "No Accounts", "value": "-1" }
-    ]
-  },
-  {
-    "type": "button",
-    "id": "btn_delete_single",
-    "defaultValue": "Delete Selected Account"
-  },
-  {
-    "type": "button",
-    "id": "btn_clear_all",
-    "defaultValue": "Delete ALL Accounts"
-  },
-  {
-    "type": "heading",
-    "defaultValue": "More Settings"
-  },
-  {
-  "type": "toggle",
-  "messageKey": "SETTING_LOOP_LIST",
-  "label": "Enabe Loop",
-  "defaultValue": true
-  },
-  {
-    "type": "heading",
-    "defaultValue": "System"
-  },
-  {
-    "type": "input",
-    "id": "status_bar",
-    "label": "Status Message",
-    "defaultValue": "Ready.",
-    "attributes": {
-      "readonly": true
-    }
-  },
-  {
-    "type": "input",
+    "type": "auth-accounts",
     "messageKey": "TOTP_EXPORT_DATA",
-    "id": "hidden_data",
-    "attributes": {
-      "style": "display:none;"
-    }
+    "defaultValue": "[]"
+  },
+  {
+    "type": "auth-add"
+  },
+  {
+    "type": "section",
+    "items": [
+      {
+        "type": "heading",
+        "defaultValue": "On the watch"
+      },
+      {
+        "type": "toggle",
+        "messageKey": "SETTING_LOOP_LIST",
+        "label": "Loop through the list",
+        "description": "Down on the last account jumps back to the first one, Up on the first jumps to the last.",
+        "defaultValue": true
+      }
+    ]
+  },
+  {
+    "type": "auth-privacy"
   },
   {
     "type": "submit",
-    "defaultValue": "Save & Send to Watch"
+    "defaultValue": "Save to watch"
   }
 ]
