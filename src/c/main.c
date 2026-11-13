@@ -5,6 +5,7 @@
 #define MAX_ACCOUNTS 100
 #define MAX_NAME_LEN 32
 #define MAX_SECRET_LEN 80
+#define INACTIVITY_TIMEOUT_MS 60000
 
 // Set in Account.digits when `secret` holds the decoded key (length byte, then
 // the key) instead of Base32 text. Older versions stored the text, which only
@@ -68,6 +69,7 @@ _Static_assert(TOTP_MAX_KEY_LEN + 1 <= MAX_SECRET_LEN, "the decoded key must fit
 
 static Window *s_main_window;
 static MenuLayer *s_menu_layer;
+static AppTimer *s_inactivity_timer;
 
 // Global variable for the loop status (default: on)
 static bool s_loop_list = true;
@@ -79,11 +81,32 @@ static int s_num_accounts = 0;
 // firmware gives each app 6 KB, which holds just under 50 accounts.
 static bool s_storage_full = false;
 
-#if defined(PBL_TOUCH) && defined(PBL_RECT)
-// Only used to notice that the list was moved by touch since the last button step.
+#if defined(PBL_TOUCH)
 static bool s_touch_subscribed = false;
+#if defined(PBL_RECT)
+// Only used to notice that the list was moved by touch since the last button step.
 static bool s_touched_since_step = false;
 #endif
+#endif
+
+// --- Inactivity timeout ---
+
+static void inactivity_timeout_callback(void *context) {
+  s_inactivity_timer = NULL;
+  // Skip the previous launcher screen and return directly to the watchface.
+  exit_reason_set(APP_EXIT_ACTION_PERFORMED_SUCCESSFULLY);
+  window_stack_pop_all(true);
+}
+
+static void reset_inactivity_timer(void) {
+  if (s_inactivity_timer &&
+      app_timer_reschedule(s_inactivity_timer, INACTIVITY_TIMEOUT_MS)) {
+    return;
+  }
+
+  s_inactivity_timer = app_timer_register(
+    INACTIVITY_TIMEOUT_MS, inactivity_timeout_callback, NULL);
+}
 
 // --- Accounts and storage ---
 
@@ -376,13 +399,19 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
 // watches. On Round 2 / Gabbro the list is centre-focused, so the selection
 // follows the finger and nothing else is needed.
 
-#if defined(PBL_TOUCH) && defined(PBL_RECT)
+#if defined(PBL_TOUCH)
 static void touch_handler(const TouchEvent *event, void *context) {
-  if (event->type == TouchEvent_Touchdown && !event->non_navigational) {
+  if (event->type != TouchEvent_Touchdown) return;
+
+  reset_inactivity_timer();
+#if defined(PBL_RECT)
+  if (!event->non_navigational) {
     s_touched_since_step = true;
   }
+#endif
 }
 
+#if defined(PBL_RECT)
 // A touch scroll moves the list but not the selection. Before a button step,
 // re-anchor the selection on the row in view so the list doesn't jump back to
 // an off-screen selection, like MenuLayer's own button handlers do.
@@ -407,11 +436,13 @@ static void reconcile_selection_after_touch(void) {
   menu_layer_set_selected_index(s_menu_layer, index, MenuRowAlignNone, false);
 }
 #endif
+#endif
 
 // --- Custom Click Handlers for Menu Looping ---
 
 // Handler for the "Down" button
 static void down_single_click_handler(ClickRecognizerRef recognizer, void *context) {
+  reset_inactivity_timer();
   if (s_num_accounts <= 0) return;
 #if defined(PBL_TOUCH) && defined(PBL_RECT)
   reconcile_selection_after_touch();
@@ -432,6 +463,7 @@ static void down_single_click_handler(ClickRecognizerRef recognizer, void *conte
 
 // Handler for the "Up" button
 static void up_single_click_handler(ClickRecognizerRef recognizer, void *context) {
+  reset_inactivity_timer();
   if (s_num_accounts <= 0) return;
 #if defined(PBL_TOUCH) && defined(PBL_RECT)
   reconcile_selection_after_touch();
@@ -459,7 +491,8 @@ static void custom_click_config_provider(void *context) {
 // --- Window ---
 
 static void main_window_appear(Window *window) {
-#if defined(PBL_TOUCH) && defined(PBL_RECT)
+  reset_inactivity_timer();
+#if defined(PBL_TOUCH)
   if (touch_service_is_enabled()) {
     touch_service_subscribe(touch_handler, NULL);
     s_touch_subscribed = true;
@@ -468,12 +501,14 @@ static void main_window_appear(Window *window) {
 }
 
 static void main_window_disappear(Window *window) {
-#if defined(PBL_TOUCH) && defined(PBL_RECT)
+#if defined(PBL_TOUCH)
   if (s_touch_subscribed) {
     touch_service_unsubscribe();
     s_touch_subscribed = false;
   }
+#if defined(PBL_RECT)
   s_touched_since_step = false;
+#endif
 #endif
 }
 
@@ -534,6 +569,10 @@ static void init(void) {
 }
 
 static void deinit(void) {
+  if (s_inactivity_timer) {
+    app_timer_cancel(s_inactivity_timer);
+    s_inactivity_timer = NULL;
+  }
   tick_timer_service_unsubscribe();
   app_message_deregister_callbacks();
   window_destroy(s_main_window);
