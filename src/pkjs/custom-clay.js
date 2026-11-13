@@ -780,7 +780,8 @@ module.exports = function() {
 
   function snapshot() {
     var loop = clayConfig.getItemByMessageKey('SETTING_LOOP_LIST');
-    return serializeAccounts() + '|' + (loop ? loop.get() : '');
+    var timeout = clayConfig.getItemByMessageKey('SETTING_TIMEOUT');
+    return serializeAccounts() + '|' + (loop ? loop.get() : '') + '|' + (timeout ? timeout.get() : '');
   }
 
   function updateDirty() {
@@ -1912,6 +1913,11 @@ module.exports = function() {
     '#main-form .component-toggle input:checked+.graphic .slide{background:var(--accent)}',
     '#main-form .component-toggle input:checked+.graphic .marker{background:#fff;transform:translateX(20px)}',
     '#main-form .component-toggle .description{padding:0 0 16px;font-size:14px;line-height:1.4;color:var(--text-2)}',
+    '#main-form .component-select label{padding:12px 0;border-radius:0}',
+    '#main-form .component-select .label{font-size:16px;color:var(--text)}',
+    '#main-form .component-select .value{margin-left:16px;font-size:16px;color:var(--text-2)}',
+    '#main-form .component-select .value:after{border-top-color:var(--accent)}',
+    '#main-form .component-select .description{padding:0 0 16px;font-size:14px;line-height:1.4;color:var(--text-2)}',
 
     '.auth-privacy{display:flex;gap:10px;align-items:flex-start;padding:2px 6px 8px!important;',
     'color:var(--text-2);font-size:13px;line-height:1.45}',
@@ -2001,6 +2007,8 @@ module.exports = function() {
 
     var loop = clayConfig.getItemByMessageKey('SETTING_LOOP_LIST');
     if (loop) loop.on('change', updateDirty);
+    var timeout = clayConfig.getItemByMessageKey('SETTING_TIMEOUT');
+    if (timeout) timeout.on('change', updateDirty);
 
     state.initial = snapshot();
     updateDirty();

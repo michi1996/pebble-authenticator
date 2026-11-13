@@ -5,6 +5,8 @@
 #define MAX_ACCOUNTS 100
 #define MAX_NAME_LEN 32
 #define MAX_SECRET_LEN 80
+#define DEFAULT_TIMEOUT_S 0
+#define MAX_TIMEOUT_S 3600
 
 // Set in Account.digits when `secret` holds the decoded key (length byte, then
 // the key) instead of Base32 text. Older versions stored the text, which only
@@ -14,6 +16,7 @@
 #define PERSIST_KEY_NUM_ACCOUNTS 100
 #define PERSIST_KEY_ACCOUNT_BASE 200
 #define PERSIST_KEY_LOOP_LIST 300 // Dedicated persist key for the loop setting
+#define PERSIST_KEY_TIMEOUT 301   // Inactivity timeout in seconds (0 = off)
 
 // AppMessage buffers are sized for the largest message actually exchanged:
 // one account (index, name, secret, period, digits; ~350 bytes) inbound and the
@@ -68,6 +71,9 @@ _Static_assert(TOTP_MAX_KEY_LEN + 1 <= MAX_SECRET_LEN, "the decoded key must fit
 
 static Window *s_main_window;
 static MenuLayer *s_menu_layer;
+static AppTimer *s_inactivity_timer;
+// Seconds without button or touch activity before the app closes (0 = never).
+static int s_timeout_s = DEFAULT_TIMEOUT_S;
 
 // Global variable for the loop status (default: on)
 static bool s_loop_list = true;
@@ -79,11 +85,47 @@ static int s_num_accounts = 0;
 // firmware gives each app 6 KB, which holds just under 50 accounts.
 static bool s_storage_full = false;
 
-#if defined(PBL_TOUCH) && defined(PBL_RECT)
-// Only used to notice that the list was moved by touch since the last button step.
+#if defined(PBL_TOUCH)
 static bool s_touch_subscribed = false;
+#if defined(PBL_RECT)
+// Only used to notice that the list was moved by touch since the last button step.
 static bool s_touched_since_step = false;
 #endif
+#endif
+
+// --- Inactivity timeout ---
+
+static void inactivity_timeout_callback(void *context) {
+  s_inactivity_timer = NULL;
+  // Skip the previous launcher screen and return directly to the watchface.
+  exit_reason_set(APP_EXIT_ACTION_PERFORMED_SUCCESSFULLY);
+  window_stack_pop_all(true);
+}
+
+static int clamp_timeout(int seconds) {
+  if (seconds < 0) return 0;
+  if (seconds > MAX_TIMEOUT_S) return MAX_TIMEOUT_S;
+  return seconds;
+}
+
+static void reset_inactivity_timer(void) {
+  if (s_timeout_s <= 0) {
+    if (s_inactivity_timer) {
+      app_timer_cancel(s_inactivity_timer);
+      s_inactivity_timer = NULL;
+    }
+    return;
+  }
+
+  const uint32_t timeout_ms = (uint32_t)s_timeout_s * 1000;
+  if (s_inactivity_timer &&
+      app_timer_reschedule(s_inactivity_timer, timeout_ms)) {
+    return;
+  }
+
+  s_inactivity_timer = app_timer_register(
+    timeout_ms, inactivity_timeout_callback, NULL);
+}
 
 // --- Accounts and storage ---
 
@@ -355,6 +397,17 @@ static void inbox_received_callback(DictionaryIterator *iterator, void *context)
     }
   }
 
+  // Handle the inactivity timeout setting from the phone
+  Tuple *timeout_tuple = dict_find(iterator, MESSAGE_KEY_SETTING_TIMEOUT);
+  if (timeout_tuple) {
+    int timeout_s = clamp_timeout(tuple_int(timeout_tuple));
+    if (timeout_s != s_timeout_s || !persist_exists(PERSIST_KEY_TIMEOUT)) {
+      s_timeout_s = timeout_s;
+      persist_write_int(PERSIST_KEY_TIMEOUT, s_timeout_s);
+    }
+    reset_inactivity_timer(); // apply the new value right away
+  }
+
   if (dict_find(iterator, MESSAGE_KEY_SYNC_END)) {
     send_sync_result();
   }
@@ -376,13 +429,19 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
 // watches. On Round 2 / Gabbro the list is centre-focused, so the selection
 // follows the finger and nothing else is needed.
 
-#if defined(PBL_TOUCH) && defined(PBL_RECT)
+#if defined(PBL_TOUCH)
 static void touch_handler(const TouchEvent *event, void *context) {
-  if (event->type == TouchEvent_Touchdown && !event->non_navigational) {
+  if (event->type != TouchEvent_Touchdown) return;
+
+  reset_inactivity_timer();
+#if defined(PBL_RECT)
+  if (!event->non_navigational) {
     s_touched_since_step = true;
   }
+#endif
 }
 
+#if defined(PBL_RECT)
 // A touch scroll moves the list but not the selection. Before a button step,
 // re-anchor the selection on the row in view so the list doesn't jump back to
 // an off-screen selection, like MenuLayer's own button handlers do.
@@ -407,11 +466,13 @@ static void reconcile_selection_after_touch(void) {
   menu_layer_set_selected_index(s_menu_layer, index, MenuRowAlignNone, false);
 }
 #endif
+#endif
 
 // --- Custom Click Handlers for Menu Looping ---
 
 // Handler for the "Down" button
 static void down_single_click_handler(ClickRecognizerRef recognizer, void *context) {
+  reset_inactivity_timer();
   if (s_num_accounts <= 0) return;
 #if defined(PBL_TOUCH) && defined(PBL_RECT)
   reconcile_selection_after_touch();
@@ -432,6 +493,7 @@ static void down_single_click_handler(ClickRecognizerRef recognizer, void *conte
 
 // Handler for the "Up" button
 static void up_single_click_handler(ClickRecognizerRef recognizer, void *context) {
+  reset_inactivity_timer();
   if (s_num_accounts <= 0) return;
 #if defined(PBL_TOUCH) && defined(PBL_RECT)
   reconcile_selection_after_touch();
@@ -459,7 +521,8 @@ static void custom_click_config_provider(void *context) {
 // --- Window ---
 
 static void main_window_appear(Window *window) {
-#if defined(PBL_TOUCH) && defined(PBL_RECT)
+  reset_inactivity_timer();
+#if defined(PBL_TOUCH)
   if (touch_service_is_enabled()) {
     touch_service_subscribe(touch_handler, NULL);
     s_touch_subscribed = true;
@@ -468,12 +531,14 @@ static void main_window_appear(Window *window) {
 }
 
 static void main_window_disappear(Window *window) {
-#if defined(PBL_TOUCH) && defined(PBL_RECT)
+#if defined(PBL_TOUCH)
   if (s_touch_subscribed) {
     touch_service_unsubscribe();
     s_touch_subscribed = false;
   }
+#if defined(PBL_RECT)
   s_touched_since_step = false;
+#endif
 #endif
 }
 
@@ -507,6 +572,11 @@ static void init(void) {
     s_loop_list = persist_read_bool(PERSIST_KEY_LOOP_LIST);
   }
 
+  // Load the inactivity timeout from persistent storage
+  if (persist_exists(PERSIST_KEY_TIMEOUT)) {
+    s_timeout_s = clamp_timeout(persist_read_int(PERSIST_KEY_TIMEOUT));
+  }
+
 #if defined(PBL_TOUCH)
   // Opt into the system's touch navigation (third-party apps are opted out by
   // default), so the account list scrolls by touch on Pebble Time 2 / Round 2.
@@ -534,6 +604,10 @@ static void init(void) {
 }
 
 static void deinit(void) {
+  if (s_inactivity_timer) {
+    app_timer_cancel(s_inactivity_timer);
+    s_inactivity_timer = NULL;
+  }
   tick_timer_service_unsubscribe();
   app_message_deregister_callbacks();
   window_destroy(s_main_window);

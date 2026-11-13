@@ -14,6 +14,8 @@ var MAX_ATTEMPTS = 4;         // per message, before giving up
 var RETRY_DELAY_MS = 1200;
 var RESULT_TIMEOUT_MS = 4000;
 var PENDING_SYNC_KEY = 'pending-sync';
+var TIMEOUT_OPTIONS = [0, 30, 60, 120, 300]; // seconds; 0 turns the timeout off
+var DEFAULT_TIMEOUT_S = 0;
 
 var currentSync = null;
 
@@ -132,11 +134,13 @@ function readAccounts(data) {
 function syncToWatch(settings) {
   var loop = settings.SETTING_LOOP_LIST;
   var loopValue = loop === undefined ? 1 : (loop && loop !== '0' ? 1 : 0);
+  var timeout = parseInt(settings.SETTING_TIMEOUT, 10);
+  var timeoutValue = TIMEOUT_OPTIONS.indexOf(timeout) >= 0 ? timeout : DEFAULT_TIMEOUT_S;
   var accounts = readAccounts(settings.TOTP_EXPORT_DATA);
 
   var messages;
   if (accounts) {
-    messages = [{ SYNC_BEGIN: 1, SETTING_LOOP_LIST: loopValue }];
+    messages = [{ SYNC_BEGIN: 1, SETTING_LOOP_LIST: loopValue, SETTING_TIMEOUT: timeoutValue }];
     accounts.forEach(function(account, index) {
       messages.push({
         ACCOUNT_INDEX: index,
@@ -148,7 +152,7 @@ function syncToWatch(settings) {
     });
     messages.push({ SYNC_END: 1 });
   } else {
-    messages = [{ SETTING_LOOP_LIST: loopValue }];
+    messages = [{ SETTING_LOOP_LIST: loopValue, SETTING_TIMEOUT: timeoutValue }];
   }
 
   var sync = {
