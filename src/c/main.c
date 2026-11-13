@@ -5,7 +5,8 @@
 #define MAX_ACCOUNTS 100
 #define MAX_NAME_LEN 32
 #define MAX_SECRET_LEN 80
-#define INACTIVITY_TIMEOUT_MS 60000
+#define DEFAULT_TIMEOUT_S 0
+#define MAX_TIMEOUT_S 3600
 
 // Set in Account.digits when `secret` holds the decoded key (length byte, then
 // the key) instead of Base32 text. Older versions stored the text, which only
@@ -15,6 +16,7 @@
 #define PERSIST_KEY_NUM_ACCOUNTS 100
 #define PERSIST_KEY_ACCOUNT_BASE 200
 #define PERSIST_KEY_LOOP_LIST 300 // Dedicated persist key for the loop setting
+#define PERSIST_KEY_TIMEOUT 301   // Inactivity timeout in seconds (0 = off)
 
 // AppMessage buffers are sized for the largest message actually exchanged:
 // one account (index, name, secret, period, digits; ~350 bytes) inbound and the
@@ -70,6 +72,8 @@ _Static_assert(TOTP_MAX_KEY_LEN + 1 <= MAX_SECRET_LEN, "the decoded key must fit
 static Window *s_main_window;
 static MenuLayer *s_menu_layer;
 static AppTimer *s_inactivity_timer;
+// Seconds without button or touch activity before the app closes (0 = never).
+static int s_timeout_s = DEFAULT_TIMEOUT_S;
 
 // Global variable for the loop status (default: on)
 static bool s_loop_list = true;
@@ -98,14 +102,29 @@ static void inactivity_timeout_callback(void *context) {
   window_stack_pop_all(true);
 }
 
+static int clamp_timeout(int seconds) {
+  if (seconds < 0) return 0;
+  if (seconds > MAX_TIMEOUT_S) return MAX_TIMEOUT_S;
+  return seconds;
+}
+
 static void reset_inactivity_timer(void) {
+  if (s_timeout_s <= 0) {
+    if (s_inactivity_timer) {
+      app_timer_cancel(s_inactivity_timer);
+      s_inactivity_timer = NULL;
+    }
+    return;
+  }
+
+  const uint32_t timeout_ms = (uint32_t)s_timeout_s * 1000;
   if (s_inactivity_timer &&
-      app_timer_reschedule(s_inactivity_timer, INACTIVITY_TIMEOUT_MS)) {
+      app_timer_reschedule(s_inactivity_timer, timeout_ms)) {
     return;
   }
 
   s_inactivity_timer = app_timer_register(
-    INACTIVITY_TIMEOUT_MS, inactivity_timeout_callback, NULL);
+    timeout_ms, inactivity_timeout_callback, NULL);
 }
 
 // --- Accounts and storage ---
@@ -378,6 +397,17 @@ static void inbox_received_callback(DictionaryIterator *iterator, void *context)
     }
   }
 
+  // Handle the inactivity timeout setting from the phone
+  Tuple *timeout_tuple = dict_find(iterator, MESSAGE_KEY_SETTING_TIMEOUT);
+  if (timeout_tuple) {
+    int timeout_s = clamp_timeout(tuple_int(timeout_tuple));
+    if (timeout_s != s_timeout_s || !persist_exists(PERSIST_KEY_TIMEOUT)) {
+      s_timeout_s = timeout_s;
+      persist_write_int(PERSIST_KEY_TIMEOUT, s_timeout_s);
+    }
+    reset_inactivity_timer(); // apply the new value right away
+  }
+
   if (dict_find(iterator, MESSAGE_KEY_SYNC_END)) {
     send_sync_result();
   }
@@ -540,6 +570,11 @@ static void init(void) {
   // Load the loop list preference from persistent storage
   if (persist_exists(PERSIST_KEY_LOOP_LIST)) {
     s_loop_list = persist_read_bool(PERSIST_KEY_LOOP_LIST);
+  }
+
+  // Load the inactivity timeout from persistent storage
+  if (persist_exists(PERSIST_KEY_TIMEOUT)) {
+    s_timeout_s = clamp_timeout(persist_read_int(PERSIST_KEY_TIMEOUT));
   }
 
 #if defined(PBL_TOUCH)

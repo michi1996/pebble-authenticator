@@ -12,7 +12,7 @@ Find it on the [Pebble App Store](https://apps.repebble.com/864fb2cb5c0444b088db
 * **Manual Entry:** Add accounts manually by entering the Account Name and the Base32 Secret Key. The key is checked before it is added; keys of up to 256 characters are supported.
 * **High Capacity:** Stores and manages up to 100 different 2FA accounts natively on your watch (see [Storage](#storage)).
 * **Clean Interface:** Optimized for readability on Pebble displays (especially Pebble Time 2), featuring large, bold fonts and an animated progress bar to show when the next code will arrive. Swipe to scroll on touch watches.
-* **Automatic Timeout:** Returns to the watchface after one minute without button or touch activity, so the app is not left open accidentally.
+* **Automatic Timeout:** Optionally returns to the watchface after a period without button or touch activity, so the app is not left open accidentally. Choose 30 seconds, 1, 2 or 5 minutes in the settings (off by default).
 * **Modern Settings Page:** Light and dark mode, reorder accounts by dragging or with the arrow buttons, rename and delete them (with undo).
 * **Backup & Restore:** Save all accounts as text, optionally encrypted with a password, and restore them later – either adding to your list or replacing it (see [Backup](#backup)).
 
