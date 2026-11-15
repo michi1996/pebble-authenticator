@@ -26,6 +26,20 @@
         "label": "Loop through the list",
         "description": "Down on the last account jumps back to the first one, Up on the first jumps to the last.",
         "defaultValue": true
+      },
+      {
+        "type": "select",
+        "messageKey": "SETTING_TIMEOUT",
+        "label": "Automatic timeout",
+        "description": "Return to the watchface after this long without button or touch activity.",
+        "defaultValue": "0",
+        "options": [
+          { "label": "Off", "value": "0" },
+          { "label": "30 seconds", "value": "30" },
+          { "label": "1 minute", "value": "60" },
+          { "label": "2 minutes", "value": "120" },
+          { "label": "5 minutes", "value": "300" }
+        ]
       }
     ]
   },

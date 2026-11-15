@@ -20,6 +20,7 @@
             "ACCOUNT_PERIOD",
             "ACCOUNT_DIGITS",
             "SETTING_LOOP_LIST",
+            "SETTING_TIMEOUT",
             "ACCOUNT_INDEX",
             "SYNC_END",
             "SYNC_RESULT"
